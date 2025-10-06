@@ -102,6 +102,8 @@ const getRoleColor = (role: string) => {
   }
 };
 
+
+
 // Simple Form Components without complex memoization
 const FormInput = ({ 
   label, 
@@ -423,6 +425,58 @@ const TodoFormModal = ({
   );
 };
 
+// Dashboard Summary Component
+const DashboardSummary = ({ 
+  filteredTodos, 
+  user, 
+  canManageAllTasks 
+}: { 
+  filteredTodos: Todo[];
+  user: any;
+  canManageAllTasks: boolean;
+}) => {
+  const myAssignedTodos = filteredTodos.filter(todo => 
+    todo.assigned_to === user?.id && !todo.completed
+  );
+  const myCreatedTodos = filteredTodos.filter(todo => 
+    todo.user_id === user?.id && !todo.completed
+  );
+  const overdueTodos = filteredTodos.filter(todo => 
+    !todo.completed && 
+    todo.due_date && 
+    new Date(todo.due_date) < new Date()
+  );
+
+  if (canManageAllTasks) return null; // Don't show for admins
+
+  return (
+    <div className="bg-gradient-to-r from-blue-50 to-indigo-50 border border-blue-200 rounded-xl p-4 mb-6">
+      <h3 className="text-sm font-semibold text-slate-900 mb-3">My Task Summary</h3>
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <div className="text-center">
+          <div className="text-2xl font-bold text-blue-600">{myAssignedTodos.length}</div>
+          <div className="text-xs text-slate-600">Assigned to Me</div>
+        </div>
+        <div className="text-center">
+          <div className="text-2xl font-bold text-green-600">{myCreatedTodos.length}</div>
+          <div className="text-xs text-slate-600">Created by Me</div>
+        </div>
+        <div className="text-center">
+          <div className="text-2xl font-bold text-red-600">
+            {overdueTodos.filter(t => t.assigned_to === user?.id).length}
+          </div>
+          <div className="text-xs text-slate-600">Overdue</div>
+        </div>
+      </div>
+      {myAssignedTodos.length === 0 && myCreatedTodos.length === 0 && (
+        <div className="text-center mt-3">
+          <p className="text-xs text-slate-500">No tasks assigned to you yet.</p>
+        </div>
+      )}
+    </div>
+  );
+};
+
 // Main Component
 export function TodoList() {
   const { user } = useAuth();
@@ -734,114 +788,155 @@ export function TodoList() {
   };
 
   const fetchTodos = async (role?: string) => {
-    const currentRole = role || userRole;
-    
-    try {
-      let query = supabase
+  const currentRole = role || userRole;
+  
+  try {
+    let data, error;
+
+    // Enhanced filtering logic for assigned tasks
+    if (!['admin', 'operations'].includes(currentRole) && user?.id) {
+      // Use TWO separate queries instead of .or() to avoid UUID/text error
+      const [createdResult, assignedResult] = await Promise.all([
+        supabase
+          .from('todos')
+          .select('*')
+          .eq('user_id', user.id),
+        supabase
+          .from('todos')
+          .select('*')
+          .eq('assigned_to', user.id)
+      ]);
+
+      if (createdResult.error) throw createdResult.error;
+      if (assignedResult.error) throw assignedResult.error;
+
+      // Merge and deduplicate by ID
+      const todoMap = new Map();
+      [...(createdResult.data || []), ...(assignedResult.data || [])].forEach(todo => {
+        todoMap.set(todo.id, todo);
+      });
+      
+      // Convert back to array and sort
+      data = Array.from(todoMap.values()).sort((a, b) => {
+        if (a.completed !== b.completed) return a.completed ? 1 : -1;
+        return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
+      });
+      
+      error = null;
+      
+      console.log('Fetching todos for user:', user?.id);
+      console.log('Filter: user_id OR assigned_to =', user?.id);
+    } else {
+      // For admin/operations, fetch all tasks
+      const { data: fetchedData, error: fetchError } = await supabase
         .from('todos')
         .select('*')
         .order('completed', { ascending: true })
         .order('created_at', { ascending: false });
+      
+      data = fetchedData;
+      error = fetchError;
+      
+      console.log('Fetching all todos for admin/operations role');
+    }
 
-      // Filter todos based on role
-      if (!['admin', 'operations'].includes(currentRole)) {
-        // Regular users can only see their own todos and todos assigned to them
-        query = query.or(`user_id.eq.${user?.id},assigned_to.eq.${user?.id}`);
-      }
+    if (error) throw error;
 
-      const { data, error } = await query;
-
-      if (error) throw error;
-
-      // Fetch user names for todos
-      const todosWithUserNames = await Promise.all(
-        (data || []).map(async (todo) => {
+    console.log('Raw todos data:', data?.length);
+    
+    // Fetch user names for todos
+    const todosWithUserNames = await Promise.all(
+      (data || []).map(async (todo) => {
+        try {
+          // Get creator name
+          let creatorName = '';
           try {
-            // Get creator name
-            let creatorName = '';
-            try {
-              const { data: userData } = await supabase
-                .from('profiles')
-                .select('full_name, name')
-                .eq('id', todo.user_id)
-                .single();
-              
-              creatorName = userData?.full_name || userData?.name || '';
-              
-              // If no name in profile, try to get from auth (fallback)
-              if (!creatorName && supabaseAdmin) {
+            const { data: userData } = await supabase
+              .from('profiles')
+              .select('full_name, name')
+              .eq('id', todo.user_id)
+              .single();
+            
+            creatorName = userData?.full_name || userData?.name || '';
+            
+            if (!creatorName && supabaseAdmin) {
+              const { data: { user: creatorUser } } = await supabaseAdmin.auth.admin.getUserById(todo.user_id);
+              creatorName = creatorUser?.email ? creatorUser.email.split('@')[0] : '';
+            }
+          } catch (profileError) {
+            if (supabaseAdmin) {
+              try {
                 const { data: { user: creatorUser } } = await supabaseAdmin.auth.admin.getUserById(todo.user_id);
                 creatorName = creatorUser?.email ? creatorUser.email.split('@')[0] : '';
-              }
-            } catch (profileError) {
-              // Fallback using email username
-              if (supabaseAdmin) {
-                try {
-                  const { data: { user: creatorUser } } = await supabaseAdmin.auth.admin.getUserById(todo.user_id);
-                  creatorName = creatorUser?.email ? creatorUser.email.split('@')[0] : '';
-                } catch (adminError) {
-                  creatorName = `user_${todo.user_id.substring(0, 8)}`;
-                }
-              } else {
+              } catch (adminError) {
                 creatorName = `user_${todo.user_id.substring(0, 8)}`;
               }
+            } else {
+              creatorName = `user_${todo.user_id.substring(0, 8)}`;
             }
+          }
 
-            // Get assigned user name if assigned
-            let assignedUserName = '';
-            if (todo.assigned_to) {
-              try {
-                const { data: assignedUserData } = await supabase
-                  .from('profiles')
-                  .select('full_name, name')
-                  .eq('id', todo.assigned_to)
-                  .single();
-                
-                assignedUserName = assignedUserData?.full_name || assignedUserData?.name || '';
-                
-                // If no name in profile, try to get from auth (fallback)
-                if (!assignedUserName && supabaseAdmin) {
+          // Get assigned user name if assigned
+          let assignedUserName = '';
+          if (todo.assigned_to) {
+            try {
+              const { data: assignedUserData } = await supabase
+                .from('profiles')
+                .select('full_name, name')
+                .eq('id', todo.assigned_to)
+                .single();
+              
+              assignedUserName = assignedUserData?.full_name || assignedUserData?.name || '';
+              
+              if (!assignedUserName && supabaseAdmin) {
+                const { data: { user: assignedUser } } = await supabaseAdmin.auth.admin.getUserById(todo.assigned_to);
+                assignedUserName = assignedUser?.email ? assignedUser.email.split('@')[0] : '';
+              }
+            } catch (profileError) {
+              if (supabaseAdmin) {
+                try {
                   const { data: { user: assignedUser } } = await supabaseAdmin.auth.admin.getUserById(todo.assigned_to);
                   assignedUserName = assignedUser?.email ? assignedUser.email.split('@')[0] : '';
-                }
-              } catch (profileError) {
-                // Fallback using email username
-                if (supabaseAdmin) {
-                  try {
-                    const { data: { user: assignedUser } } = await supabaseAdmin.auth.admin.getUserById(todo.assigned_to);
-                    assignedUserName = assignedUser?.email ? assignedUser.email.split('@')[0] : '';
-                  } catch (adminError) {
-                    assignedUserName = `user_${todo.assigned_to.substring(0, 8)}`;
-                  }
-                } else {
+                } catch (adminError) {
                   assignedUserName = `user_${todo.assigned_to.substring(0, 8)}`;
                 }
+              } else {
+                assignedUserName = `user_${todo.assigned_to.substring(0, 8)}`;
               }
             }
-
-            return {
-              ...todo,
-              user_name: creatorName,
-              assigned_user_name: assignedUserName
-            };
-          } catch (error) {
-            console.error('Error fetching user data for todo:', error);
-            return {
-              ...todo,
-              user_name: `user_${todo.user_id.substring(0, 8)}`,
-              assigned_user_name: todo.assigned_to ? `user_${todo.assigned_to.substring(0, 8)}` : ''
-            };
           }
-        })
-      );
 
-      setTodos(todosWithUserNames);
-    } catch (error) {
-      console.error('Error fetching todos:', error);
-    } finally {
-      setLoading(false);
+          return {
+            ...todo,
+            user_name: creatorName,
+            assigned_user_name: assignedUserName
+          };
+        } catch (error) {
+          console.error('Error fetching user data for todo:', error);
+          return {
+            ...todo,
+            user_name: `user_${todo.user_id.substring(0, 8)}`,
+            assigned_user_name: todo.assigned_to ? `user_${todo.assigned_to.substring(0, 8)}` : ''
+          };
+        }
+      })
+    );
+
+    // Log filtered results for debugging
+    console.log('Processed todos:', todosWithUserNames.length);
+    if (!['admin', 'operations'].includes(currentRole)) {
+      const assignedTodos = todosWithUserNames.filter(t => t.assigned_to === user?.id);
+      const createdTodos = todosWithUserNames.filter(t => t.user_id === user?.id);
+      console.log(`Assigned to user: ${assignedTodos.length}, Created by user: ${createdTodos.length}`);
     }
-  };
+
+    setTodos(todosWithUserNames);
+  } catch (error) {
+    console.error('Error fetching todos:', error);
+  } finally {
+    setLoading(false);
+  }
+};
 
   // Permission checks
   const canManageAllTasks = useCallback((role = userRole) => {
@@ -1166,148 +1261,168 @@ export function TodoList() {
     </div>
   );
 
-  const TodoItem = ({ todo }: { todo: Todo }) => (
-    <div
-      className={`group bg-white/70 backdrop-blur-xl rounded-2xl shadow-md hover:shadow-xl p-5 border border-slate-200/60 transition-all duration-300 hover:scale-[1.02] flex flex-col h-full ${
-        todo.completed ? 'opacity-60 hover:opacity-100' : ''
-      }`}
-    >
-      {/* Header with title and delete button */}
-      <div className="flex justify-between items-start mb-3">
-        <div className="flex items-center gap-2 flex-1 pr-2">
-          <button
-            onClick={() => toggleComplete(todo.id, todo.completed)}
-            className={`flex-shrink-0 transition-all transform hover:scale-110 ${
-              todo.completed 
-                ? 'text-green-500 hover:text-slate-400' 
-                : 'text-slate-300 hover:text-blue-600'
-            }`}
-          >
-            {todo.completed ? (
-              <Check className="w-5 h-5" strokeWidth={2.5} />
-            ) : (
-              <Circle className="w-5 h-5" strokeWidth={2.5} />
-            )}
-          </button>
-          <div className="flex-1">
-            <h3 className={`text-sm font-semibold leading-tight ${todo.completed ? 'line-through text-slate-500' : 'text-slate-900'}`}>
-              {todo.title}
-            </h3>
-            {/* Show creator name for admin/operations */}
-            {canManageAllTasks() && todo.user_name && (
-              <p className="text-xs text-slate-500 mt-1">By: {todo.user_name}</p>
-            )}
-          </div>
-        </div>
-        {canDeleteTask(todo) && (
-          <button
-            onClick={() => handleDelete(todo.id)}
-            className="text-slate-400 hover:text-red-500 transition-all p-1.5 rounded-lg hover:bg-red-50 opacity-0 group-hover:opacity-100 flex-shrink-0"
-          >
-            <Trash2 className="w-3.5 h-3.5" />
-          </button>
-        )}
-      </div>
-
-      {/* Tags */}
-      <div className="flex flex-wrap gap-1.5 mb-4">
-        <span className={`inline-flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-semibold border ${getPriorityColor(todo.priority)}`}>
-          <span className={`w-1.5 h-1.5 rounded-full ${getPriorityDot(todo.priority)}`} />
-          {todo.priority}
-        </span>
-        
-        {todo.assigned_to && (
-          <span className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-purple-50 text-purple-700 text-xs font-semibold border border-purple-200">
-            <User className="w-3 h-3" />
-            {todo.assigned_user_name 
-              ? (todo.assigned_to === user?.id ? 'Me' : todo.assigned_user_name)
-              : 'Assigned'
-            }
-          </span>
-        )}
-
-        {todo.due_date && (
-          <span className={`inline-flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-semibold border ${
-            new Date(todo.due_date) < new Date() && !todo.completed
-              ? 'bg-red-50 text-red-700 border-red-200'
-              : 'bg-slate-50 text-slate-700 border-slate-200'
-          }`}>
-            <Calendar className="w-3 h-3" />
-            {new Date(todo.due_date).toLocaleDateString()}
-          </span>
-        )}
-
-        {/* Branch and Country Tags */}
-        {(todo.branch_name || todo.country) && (
-          <>
-            {todo.branch_name && (
-              <span className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-blue-50 text-blue-700 text-xs font-semibold border border-blue-200">
-                <Building className="w-3 h-3" />
-                {todo.branch_name}
-              </span>
-            )}
-            {todo.country && todo.country !== 'XX' && (
-              <span className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-indigo-50 text-indigo-700 text-xs font-semibold border border-indigo-200">
-                <ReactCountryFlag
-                  countryCode={todo.country}
-                  svg
-                  style={{
-                    width: '1em',
-                    height: '1em',
-                  }}
-                  title={getCountryName(todo.country)}
-                />
-                {getCountryName(todo.country)}
-              </span>
-            )}
-            {todo.country === 'XX' && (
-              <span className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-indigo-50 text-indigo-700 text-xs font-semibold border border-indigo-200">
-                <Globe className="w-3 h-3" />
-                Other
-              </span>
-            )}
-          </>
-        )}
-      </div>
-
-      {/* Assignment Section */}
-      <div className="mt-auto pt-3 border-t border-slate-100">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <span className="text-xs text-slate-500 font-medium">Assign to:</span>
-            <div className="relative">
-              <select
-                value={todo.assigned_to || ''}
-                onChange={(e) => reassignTask(todo.id, e.target.value || null)}
-                disabled={!canReassignTasks()}
-                className={`text-xs bg-transparent border-none focus:outline-none focus:ring-0 pr-6 appearance-none font-medium text-slate-700 ${
-                  canReassignTasks() 
-                    ? 'cursor-pointer hover:text-slate-900' 
-                    : 'cursor-not-allowed opacity-50'
-                }`}
-              >
-                <option value="">Unassigned</option>
-                {teamMembers.map((member) => (
-                  <option key={member.id} value={member.id}>
-                    {getDisplayName(member.name, member.email)}
-                    {member.id === user?.id && ' (Me)'}
-                  </option>
-                ))}
-              </select>
-              <ChevronDown className="absolute right-0 top-1/2 -translate-y-1/2 w-3 h-3 text-slate-400 pointer-events-none" />
+  const TodoItem = ({ todo }: { todo: Todo }) => {
+    const isAssignedToMe = todo.assigned_to === user?.id;
+    const isCreatedByMe = todo.user_id === user?.id;
+    
+    return (
+      <div
+        className={`group bg-white/70 backdrop-blur-xl rounded-2xl shadow-md hover:shadow-xl p-5 border border-slate-200/60 transition-all duration-300 hover:scale-[1.02] flex flex-col h-full ${
+          todo.completed ? 'opacity-60 hover:opacity-100' : ''
+        } ${isAssignedToMe ? 'border-l-4 border-l-blue-500' : ''}`}
+      >
+        {/* Header with title and delete button */}
+        <div className="flex justify-between items-start mb-3">
+          <div className="flex items-center gap-2 flex-1 pr-2">
+            <button
+              onClick={() => toggleComplete(todo.id, todo.completed)}
+              className={`flex-shrink-0 transition-all transform hover:scale-110 ${
+                todo.completed 
+                  ? 'text-green-500 hover:text-slate-400' 
+                  : 'text-slate-300 hover:text-blue-600'
+              }`}
+            >
+              {todo.completed ? (
+                <Check className="w-5 h-5" strokeWidth={2.5} />
+              ) : (
+                <Circle className="w-5 h-5" strokeWidth={2.5} />
+              )}
+            </button>
+            <div className="flex-1">
+              <div className="flex items-center gap-2">
+                <h3 className={`text-sm font-semibold leading-tight ${todo.completed ? 'line-through text-slate-500' : 'text-slate-900'}`}>
+                  {todo.title}
+                </h3>
+                {isAssignedToMe && (
+                  <span className="inline-flex items-center gap-1 px-2 py-1 bg-blue-100 text-blue-700 rounded-lg text-xs font-semibold">
+                    <User className="w-3 h-3" />
+                    Assigned to Me
+                  </span>
+                )}
+              </div>
+              
+              {/* Show creator/assignee info */}
+              <div className="flex items-center gap-4 mt-1 text-xs text-slate-500">
+                {isCreatedByMe && <span>Created by me</span>}
+                {!isCreatedByMe && todo.user_name && (
+                  <span>By: {todo.user_name}</span>
+                )}
+                {isAssignedToMe && !isCreatedByMe && (
+                  <span className="text-blue-600 font-medium">✓ Assigned to me</span>
+                )}
+              </div>
             </div>
           </div>
+          {canDeleteTask(todo) && (
+            <button
+              onClick={() => handleDelete(todo.id)}
+              className="text-slate-400 hover:text-red-500 transition-all p-1.5 rounded-lg hover:bg-red-50 opacity-0 group-hover:opacity-100 flex-shrink-0"
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+            </button>
+          )}
+        </div>
+
+        {/* Tags */}
+        <div className="flex flex-wrap gap-1.5 mb-4">
+          <span className={`inline-flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-semibold border ${getPriorityColor(todo.priority)}`}>
+            <span className={`w-1.5 h-1.5 rounded-full ${getPriorityDot(todo.priority)}`} />
+            {todo.priority}
+          </span>
           
-          <div className="flex items-center gap-1 text-xs text-slate-400">
-            <Clock className="w-3 h-3" />
-            <span className="font-medium">
-              {new Date(todo.created_at).toLocaleDateString()}
+          {todo.assigned_to && (
+            <span className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-purple-50 text-purple-700 text-xs font-semibold border border-purple-200">
+              <User className="w-3 h-3" />
+              {todo.assigned_user_name 
+                ? (todo.assigned_to === user?.id ? 'Me' : todo.assigned_user_name)
+                : 'Assigned'
+              }
             </span>
+          )}
+
+          {todo.due_date && (
+            <span className={`inline-flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-semibold border ${
+              new Date(todo.due_date) < new Date() && !todo.completed
+                ? 'bg-red-50 text-red-700 border-red-200'
+                : 'bg-slate-50 text-slate-700 border-slate-200'
+            }`}>
+              <Calendar className="w-3 h-3" />
+              {new Date(todo.due_date).toLocaleDateString()}
+            </span>
+          )}
+
+          {/* Branch and Country Tags */}
+          {(todo.branch_name || todo.country) && (
+            <>
+              {todo.branch_name && (
+                <span className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-blue-50 text-blue-700 text-xs font-semibold border border-blue-200">
+                  <Building className="w-3 h-3" />
+                  {todo.branch_name}
+                </span>
+              )}
+              {todo.country && todo.country !== 'XX' && (
+                <span className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-indigo-50 text-indigo-700 text-xs font-semibold border border-indigo-200">
+                  <ReactCountryFlag
+                    countryCode={todo.country}
+                    svg
+                    style={{
+                      width: '1em',
+                      height: '1em',
+                    }}
+                    title={getCountryName(todo.country)}
+                  />
+                  {getCountryName(todo.country)}
+                </span>
+              )}
+              {todo.country === 'XX' && (
+                <span className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-indigo-50 text-indigo-700 text-xs font-semibold border border-indigo-200">
+                  <Globe className="w-3 h-3" />
+                  Other
+                </span>
+              )}
+            </>
+          )}
+        </div>
+
+        {/* Assignment Section */}
+        <div className="mt-auto pt-3 border-t border-slate-100">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-slate-500 font-medium">Assign to:</span>
+              <div className="relative">
+                <select
+                  value={todo.assigned_to || ''}
+                  onChange={(e) => reassignTask(todo.id, e.target.value || null)}
+                  disabled={!canReassignTasks()}
+                  className={`text-xs bg-transparent border-none focus:outline-none focus:ring-0 pr-6 appearance-none font-medium text-slate-700 ${
+                    canReassignTasks() 
+                      ? 'cursor-pointer hover:text-slate-900' 
+                      : 'cursor-not-allowed opacity-50'
+                  }`}
+                >
+                  <option value="">Unassigned</option>
+                  {teamMembers.map((member) => (
+                    <option key={member.id} value={member.id}>
+                      {getDisplayName(member.name, member.email)}
+                      {member.id === user?.id && ' (Me)'}
+                    </option>
+                  ))}
+                </select>
+                <ChevronDown className="absolute right-0 top-1/2 -translate-y-1/2 w-3 h-3 text-slate-400 pointer-events-none" />
+              </div>
+            </div>
+            
+            <div className="flex items-center gap-1 text-xs text-slate-400">
+              <Clock className="w-3 h-3" />
+              <span className="font-medium">
+                {new Date(todo.created_at).toLocaleDateString()}
+              </span>
+            </div>
           </div>
         </div>
       </div>
-    </div>
-  );
+    );
+  };
 
   if (loading) return <LoadingSpinner />;
 
@@ -1358,6 +1473,13 @@ export function TodoList() {
           </button>
         </div>
       </div>
+
+      {/* Add Dashboard Summary for regular users */}
+      <DashboardSummary 
+        filteredTodos={filteredTodos}
+        user={user}
+        canManageAllTasks={canManageAllTasks()}
+      />
 
       {/* Active Filters Display */}
       {hasActiveFilters() && (
