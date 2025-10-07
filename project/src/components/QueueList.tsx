@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
-import { Plus, DollarSign, Tag, AlertCircle, Clock, Trash2, X, Building, Globe, ChevronDown, Upload, FileText, Image, Download, Check, X as XIcon, MessageSquare, User, Shield, Calendar, Filter, Plane, RadioTower, Edit2, Save, ChevronLeft, ChevronRight } from 'lucide-react';
+import { Plus, HandCoins, Tag, AlertCircle, Clock, Trash2, X, Building, Globe, ChevronDown, Upload, FileText, Image, Download, Check, X as XIcon, MessageSquare, User, Shield, Calendar, Filter, Plane, RadioTower, Edit2, Save, ChevronLeft, ChevronRight } from 'lucide-react';
 import ReactCountryFlag from 'react-country-flag';
 
 // Constants-driven architecture
@@ -574,7 +574,7 @@ const QueueFormModal = ({
                     Amount
                   </label>
                   <div className="relative">
-                    <DollarSign className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+                    <HandCoins className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
                     <input
                       type="number"
                       step="0.01"
@@ -1884,7 +1884,7 @@ export function QueueList() {
                 )}
                 {amountFilter && (
                   <span className="inline-flex items-center gap-1 px-2 py-1 bg-green-100 text-green-700 rounded-lg text-xs font-medium">
-                    <DollarSign className="w-3 h-3" />
+                    <HandCoins className="w-3 h-3" />
                     Min: {formatCurrency(parseFloat(amountFilter), 'USD')}
                     <button onClick={() => setAmountFilter('')} className="text-green-500 hover:text-green-700">
                       <X className="w-3 h-3" />
@@ -2033,7 +2033,7 @@ export function QueueList() {
                 <div className="flex flex-wrap gap-1.5 mb-4">
                   {queue.amount && (
                     <span className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-gradient-to-r from-emerald-50 to-emerald-100/80 text-emerald-700 text-xs font-semibold border border-emerald-200/60">
-                      <DollarSign className="w-3 h-3" />
+                      <HandCoins className="w-3 h-3" />
                       {formatCurrency(queue.amount, queue.currency)}
                       {queue.amount > 500 && (
                         <span className="text-xs">⚠️</span>

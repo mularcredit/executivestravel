@@ -82,8 +82,31 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   const signOut = async () => {
-    const { error } = await supabase.auth.signOut();
-    if (error) throw error;
+    try {
+      // Sign out from Supabase first
+      const { error } = await supabase.auth.signOut({ scope: 'global' });
+      
+      if (error) {
+        console.error('Sign out error:', error);
+        throw error;
+      }
+
+      // Explicitly clear local state
+      setUser(null);
+      
+      // Sign out from Microsoft/Azure AD
+      // This clears the Microsoft session so user has to re-authenticate
+      const microsoftLogoutUrl = `https://login.microsoftonline.com/common/oauth2/v2.0/logout?post_logout_redirect_uri=${encodeURIComponent(window.location.origin + '/login')}`;
+      
+      // Redirect to Microsoft logout, which will then redirect back to your login page
+      window.location.href = microsoftLogoutUrl;
+      
+    } catch (error) {
+      console.error('Error during sign out:', error);
+      // Fallback: still try to redirect even if there's an error
+      navigate('/login', { replace: true });
+      throw error;
+    }
   };
 
   // Calculate derived values inside the component
