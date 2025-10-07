@@ -1,17 +1,27 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { supabase, supabaseAdmin } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
-import { Plus, Check, Circle, Trash2, Calendar, AlertCircle, Clock, User, ChevronDown, X, Users, Building, Globe, Shield, RadioTower, Filter } from 'lucide-react';
+import { 
+  Plus, Check, Circle, Trash2, Calendar, AlertCircle, Clock, User, 
+  ChevronDown, X, Users, Building, Globe, Shield, RadioTower, Filter,
+  Edit3, Star, Repeat, MessageSquare, Tag, FolderOpen,
+  Play, Square, Pause, List, Grid, ChevronLeft, ChevronRight
+} from 'lucide-react';
 import ReactCountryFlag from 'react-country-flag';
 
 // Constants
 const TODO_CONSTANTS = {
   priorities: ['low', 'medium', 'high'] as const,
+  statuses: ['not-started', 'in-progress', 'completed'] as const,
+  categories: ['work', 'personal', 'shopping', 'health', 'finance', 'other'] as const,
+  repeatOptions: ['none', 'daily', 'weekly', 'monthly', 'yearly'] as const,
   countries: [
     { name: 'Kenya', code: 'KE' },
     { name: 'South Sudan', code: 'SS' },
     { name: 'Other', code: 'XX' }
-  ] as const
+  ] as const,
+  tabs: ['all', 'active', 'completed', 'assigned-to-me', 'created-by-me', 'important'] as const,
+  itemsPerPage: 9
 } as const;
 
 // Date filter options
@@ -41,6 +51,22 @@ type Todo = {
   country: string | null;
   assigned_user_name?: string;
   user_name?: string;
+  status: string;
+  important: boolean;
+  category: string;
+  repeat: string;
+  completed_comment: string | null;
+  completed_at: string | null;
+  time_tracked?: number; // Total time tracked in seconds
+  time_entries?: TimeEntry[]; // Individual time entries
+};
+
+type TimeEntry = {
+  id: string;
+  todo_id: string;
+  start_time: string;
+  end_time: string | null;
+  duration: number; // in seconds
 };
 
 type FormData = {
@@ -50,12 +76,22 @@ type FormData = {
   assigned_to: string;
   branchName: string;
   country: string;
+  status: string;
+  important: boolean;
+  category: string;
+  repeat: string;
 };
 
 type TeamMember = {
   id: string;
   email: string;
   name: string;
+};
+
+type ActiveTimer = {
+  todoId: string;
+  startTime: Date;
+  entryId?: string;
 };
 
 // Utility functions
@@ -74,6 +110,36 @@ const getPriorityDot = (priority: string) => {
     case 'medium': return 'bg-amber-500';
     case 'low': return 'bg-green-500';
     default: return 'bg-slate-500';
+  }
+};
+
+const getStatusColor = (status: string) => {
+  switch (status) {
+    case 'not-started': return 'bg-gray-100 text-gray-700 border-gray-200';
+    case 'in-progress': return 'bg-blue-100 text-blue-700 border-blue-200';
+    case 'completed': return 'bg-green-100 text-green-700 border-green-200';
+    default: return 'bg-slate-100 text-slate-700 border-slate-200';
+  }
+};
+
+const getStatusIcon = (status: string) => {
+  switch (status) {
+    case 'not-started': return <Circle className="w-3 h-3" />;
+    case 'in-progress': return <Clock className="w-3 h-3" />;
+    case 'completed': return <Check className="w-3 h-3" />;
+    default: return <Circle className="w-3 h-3" />;
+  }
+};
+
+const getCategoryColor = (category: string) => {
+  switch (category) {
+    case 'work': return 'bg-blue-50 text-blue-700 border-blue-200';
+    case 'personal': return 'bg-purple-50 text-purple-700 border-purple-200';
+    case 'shopping': return 'bg-amber-50 text-amber-700 border-amber-200';
+    case 'health': return 'bg-emerald-50 text-emerald-700 border-emerald-200';
+    case 'finance': return 'bg-indigo-50 text-indigo-700 border-indigo-200';
+    case 'other': return 'bg-slate-50 text-slate-700 border-slate-200';
+    default: return 'bg-slate-50 text-slate-700 border-slate-200';
   }
 };
 
@@ -102,9 +168,26 @@ const getRoleColor = (role: string) => {
   }
 };
 
+const formatTime = (seconds: number) => {
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  const secs = seconds % 60;
+  
+  if (hours > 0) {
+    return `${hours}h ${minutes}m ${secs}s`;
+  } else if (minutes > 0) {
+    return `${minutes}m ${secs}s`;
+  } else {
+    return `${secs}s`;
+  }
+};
 
+// Time tracking functions
+const calculateTotalTrackedTime = (timeEntries: TimeEntry[] = []) => {
+  return timeEntries.reduce((total, entry) => total + entry.duration, 0);
+};
 
-// Simple Form Components without complex memoization
+// Simple Form Components (keep the same as before)
 const FormInput = ({ 
   label, 
   value, 
@@ -176,19 +259,51 @@ const FormSelect = ({
   </div>
 );
 
-// Standalone TodoFormModal component
+const FormTextarea = ({ 
+  label, 
+  value, 
+  onChange, 
+  placeholder, 
+  required 
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  placeholder?: string;
+  required?: boolean;
+}) => {
+  return (
+    <div>
+      <label className="block text-xs font-semibold text-slate-700 mb-2">{label}</label>
+      <textarea
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all placeholder:text-slate-400 text-xs resize-none"
+        placeholder={placeholder}
+        required={required}
+        rows={3}
+      />
+    </div>
+  );
+};
+
+// Standalone TodoFormModal component (keep the same as before)
 const TodoFormModal = ({ 
   isOpen, 
   onClose, 
   onSubmit, 
   teamMembers, 
-  user 
+  user,
+  editingTodo,
+  onUpdate
 }: { 
   isOpen: boolean;
   onClose: () => void;
   onSubmit: (formData: FormData) => void;
   teamMembers: TeamMember[];
   user: any;
+  editingTodo?: Todo | null;
+  onUpdate?: (id: string, formData: FormData) => void;
 }) => {
   const [formData, setFormData] = useState<FormData>({
     title: '',
@@ -196,24 +311,47 @@ const TodoFormModal = ({
     due_date: '',
     assigned_to: '',
     branchName: '',
-    country: ''
+    country: '',
+    status: 'not-started',
+    important: false,
+    category: 'other',
+    repeat: 'none'
   });
 
-  // Reset form when modal opens/closes
+  // Reset form when modal opens/closes or editingTodo changes
   useEffect(() => {
     if (isOpen) {
-      setFormData({
-        title: '',
-        priority: 'medium',
-        due_date: '',
-        assigned_to: '',
-        branchName: '',
-        country: ''
-      });
+      if (editingTodo) {
+        setFormData({
+          title: editingTodo.title,
+          priority: editingTodo.priority,
+          due_date: editingTodo.due_date || '',
+          assigned_to: editingTodo.assigned_to || '',
+          branchName: editingTodo.branch_name || '',
+          country: editingTodo.country || '',
+          status: editingTodo.status,
+          important: editingTodo.important,
+          category: editingTodo.category,
+          repeat: editingTodo.repeat
+        });
+      } else {
+        setFormData({
+          title: '',
+          priority: 'medium',
+          due_date: '',
+          assigned_to: '',
+          branchName: '',
+          country: '',
+          status: 'not-started',
+          important: false,
+          category: 'other',
+          repeat: 'none'
+        });
+      }
     }
-  }, [isOpen]);
+  }, [isOpen, editingTodo]);
 
-  const handleInputChange = (field: keyof FormData, value: string) => {
+  const handleInputChange = (field: keyof FormData, value: string | boolean) => {
     setFormData(prev => ({
       ...prev,
       [field]: value
@@ -222,7 +360,11 @@ const TodoFormModal = ({
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    onSubmit(formData);
+    if (editingTodo && onUpdate) {
+      onUpdate(editingTodo.id, formData);
+    } else {
+      onSubmit(formData);
+    }
     onClose();
   };
 
@@ -247,13 +389,30 @@ const TodoFormModal = ({
     label: priority.charAt(0).toUpperCase() + priority.slice(1)
   }));
 
+  const statusOptions = TODO_CONSTANTS.statuses.map(status => ({
+    value: status,
+    label: status.split('-').map(word => word.charAt(0).toUpperCase() + word.slice(1)).join(' ')
+  }));
+
+  const categoryOptions = TODO_CONSTANTS.categories.map(category => ({
+    value: category,
+    label: category.charAt(0).toUpperCase() + category.slice(1)
+  }));
+
+  const repeatOptions = TODO_CONSTANTS.repeatOptions.map(repeat => ({
+    value: repeat,
+    label: repeat.charAt(0).toUpperCase() + repeat.slice(1)
+  }));
+
   if (!isOpen) return null;
 
   return (
     <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
       <div className="bg-white rounded-2xl shadow-xl w-full max-w-4xl max-h-[90vh] overflow-y-auto">
         <div className="flex justify-between items-center p-6 border-b border-slate-200 sticky top-0 bg-white z-10">
-          <h3 className="text-xl font-semibold text-slate-900">Create New Task</h3>
+          <h3 className="text-xl font-semibold text-slate-900">
+            {editingTodo ? 'Edit Task' : 'Create New Task'}
+          </h3>
           <button 
             onClick={onClose}
             className="text-slate-400 hover:text-slate-600 transition-colors p-1 rounded-lg"
@@ -266,7 +425,7 @@ const TodoFormModal = ({
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
             {/* Left Column - Basic Info */}
             <div className="space-y-4">
-              {/* Task Title - Fixed with direct state update */}
+              {/* Task Title */}
               <div>
                 <label className="block text-xs font-semibold text-slate-700 mb-2">Task Title</label>
                 <div className="relative">
@@ -292,9 +451,26 @@ const TodoFormModal = ({
                 options={teamMemberOptions}
               />
 
+              {/* Status and Category */}
+              <div className="grid grid-cols-2 gap-4">
+                <FormSelect
+                  label="Status"
+                  value={formData.status}
+                  onChange={(value) => handleInputChange('status', value)}
+                  options={statusOptions}
+                />
+
+                <FormSelect
+                  label="Category"
+                  value={formData.category}
+                  onChange={(value) => handleInputChange('category', value)}
+                  icon={FolderOpen}
+                  options={categoryOptions}
+                />
+              </div>
+
               {/* Branch and Country Fields */}
               <div className="grid grid-cols-2 gap-4">
-                {/* Branch Name - Fixed with direct state update */}
                 <div>
                   <label className="block text-xs font-semibold text-slate-700 mb-2">Branch Name</label>
                   <div className="relative">
@@ -345,61 +521,72 @@ const TodoFormModal = ({
                 </div>
               </div>
 
-              {/* Priority Preview */}
-              <div>
-                <label className="block text-xs font-semibold text-slate-700 mb-2">Priority Preview</label>
-                <div className="flex gap-2">
-                  {TODO_CONSTANTS.priorities.map((priority) => (
-                    <span
-                      key={priority}
-                      className={`px-3 py-2 rounded-lg text-xs font-semibold border ${
-                        formData.priority === priority 
-                          ? getPriorityColor(priority)
-                          : 'bg-slate-100 text-slate-500 border-slate-200'
-                      }`}
-                    >
-                      {priority.charAt(0).toUpperCase() + priority.slice(1)}
-                    </span>
-                  ))}
+              {/* Repeat Option */}
+              <FormSelect
+                label="Repeat"
+                value={formData.repeat}
+                onChange={(value) => handleInputChange('repeat', value)}
+                icon={Repeat}
+                options={repeatOptions}
+              />
+
+              {/* Important Toggle */}
+              <div className="flex items-center justify-between p-3 bg-slate-50 border border-slate-200 rounded-xl">
+                <div className="flex items-center gap-2">
+                  <Star className={`w-4 h-4 ${formData.important ? 'text-amber-500 fill-amber-500' : 'text-slate-400'}`} />
+                  <span className="text-xs font-semibold text-slate-700">Mark as Important</span>
                 </div>
+                <button
+                  type="button"
+                  onClick={() => handleInputChange('important', !formData.important)}
+                  className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
+                    formData.important ? 'bg-amber-500' : 'bg-slate-300'
+                  }`}
+                >
+                  <span
+                    className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                      formData.important ? 'translate-x-6' : 'translate-x-1'
+                    }`}
+                  />
+                </button>
               </div>
 
-              {/* Assignment Preview */}
-              {formData.assigned_to && (
-                <div className="pt-2">
-                  <label className="block text-xs font-semibold text-slate-700 mb-2">Assigned To</label>
-                  <div className="flex items-center gap-3 px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl">
-                    <User className="w-4 h-4 text-slate-400" />
-                    <span className="text-sm font-medium text-slate-700">
-                      {formData.assigned_to === user?.id 
-                        ? `Me (${getDisplayName(teamMembers.find(m => m.id === user?.id)?.name || '', user?.email || '')})`
-                        : getDisplayName(teamMembers.find(m => m.id === formData.assigned_to)?.name || '', '')
-                      }
+              {/* Preview Section */}
+              <div className="space-y-3 pt-2">
+                <label className="block text-xs font-semibold text-slate-700">Preview</label>
+                
+                {/* Status and Priority Preview */}
+                <div className="flex gap-2">
+                  <span className={`inline-flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-semibold border ${getStatusColor(formData.status)}`}>
+                    {getStatusIcon(formData.status)}
+                    {statusOptions.find(s => s.value === formData.status)?.label}
+                  </span>
+                  <span className={`inline-flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-semibold border ${getPriorityColor(formData.priority)}`}>
+                    <span className={`w-1.5 h-1.5 rounded-full ${getPriorityDot(formData.priority)}`} />
+                    {priorityOptions.find(p => p.value === formData.priority)?.label}
+                  </span>
+                  {formData.important && (
+                    <span className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-amber-50 text-amber-700 text-xs font-semibold border border-amber-200">
+                      <Star className="w-3 h-3 fill-amber-500" />
+                      Important
                     </span>
-                  </div>
+                  )}
                 </div>
-              )}
 
-              {/* Country Preview */}
-              {formData.country && formData.country !== 'XX' && (
-                <div className="pt-2">
-                  <label className="block text-xs font-semibold text-slate-700 mb-2">Selected Country</label>
-                  <div className="flex items-center gap-3 px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl">
-                    <ReactCountryFlag
-                      countryCode={formData.country}
-                      svg
-                      style={{
-                        width: '1.5em',
-                        height: '1.5em',
-                      }}
-                      title={getCountryName(formData.country)}
-                    />
-                    <span className="text-sm font-medium text-slate-700">
-                      {getCountryName(formData.country)}
-                    </span>
-                  </div>
-                </div>
-              )}
+                {/* Category Preview */}
+                <span className={`inline-flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-semibold border ${getCategoryColor(formData.category)}`}>
+                  <Tag className="w-3 h-3" />
+                  {categoryOptions.find(c => c.value === formData.category)?.label}
+                </span>
+
+                {/* Repeat Preview */}
+                {formData.repeat !== 'none' && (
+                  <span className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-indigo-50 text-indigo-700 text-xs font-semibold border border-indigo-200">
+                    <Repeat className="w-3 h-3" />
+                    Repeats {formData.repeat}ly
+                  </span>
+                )}
+              </div>
             </div>
           </div>
 
@@ -409,7 +596,7 @@ const TodoFormModal = ({
               type="submit"
               className="flex-1 bg-gradient-to-r from-blue-500 to-blue-600 hover:from-blue-600 hover:to-blue-700 text-white py-3.5 rounded-xl font-semibold shadow-lg hover:shadow-xl transition-all text-xs"
             >
-              Create Task
+              {editingTodo ? 'Update Task' : 'Create Task'}
             </button>
             <button
               type="button"
@@ -425,7 +612,70 @@ const TodoFormModal = ({
   );
 };
 
-// Dashboard Summary Component
+// Completion Comment Modal (keep the same as before)
+const CompletionCommentModal = ({ 
+  isOpen, 
+  onClose, 
+  onSubmit 
+}: { 
+  isOpen: boolean;
+  onClose: () => void;
+  onSubmit: (comment: string) => void;
+}) => {
+  const [comment, setComment] = useState('');
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    onSubmit(comment);
+    setComment('');
+    onClose();
+  };
+
+  if (!isOpen) return null;
+
+  return (
+    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+      <div className="bg-white rounded-2xl shadow-xl w-full max-w-md">
+        <div className="flex justify-between items-center p-6 border-b border-slate-200">
+          <h3 className="text-lg font-semibold text-slate-900">Add Completion Comment</h3>
+          <button 
+            onClick={onClose}
+            className="text-slate-400 hover:text-slate-600 transition-colors p-1 rounded-lg"
+          >
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+        
+        <form onSubmit={handleSubmit} className="p-6">
+          <FormTextarea
+            label="Completion Comment"
+            value={comment}
+            onChange={setComment}
+            placeholder="Add any notes about completing this task..."
+          />
+          
+          <div className="flex gap-3 pt-4">
+            <button
+              type="submit"
+              className="flex-1 bg-green-500 hover:bg-green-600 text-white py-3 rounded-xl font-semibold transition-all text-xs"
+            >
+              Complete Task
+            </button>
+            <button
+              type="button"
+              onClick={onClose}
+              className="flex-1 bg-slate-100 hover:bg-slate-200 text-slate-700 py-3 rounded-xl font-semibold transition-all text-xs"
+            >
+              Cancel
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+};
+
+// Dashboard Summary Component (keep the same as before)
 const DashboardSummary = ({ 
   filteredTodos, 
   user, 
@@ -446,13 +696,16 @@ const DashboardSummary = ({
     todo.due_date && 
     new Date(todo.due_date) < new Date()
   );
+  const importantTodos = filteredTodos.filter(todo => 
+    todo.important && !todo.completed
+  );
 
-  if (canManageAllTasks) return null; // Don't show for admins
+  if (canManageAllTasks) return null;
 
   return (
     <div className="bg-gradient-to-r from-blue-50 to-indigo-50 border border-blue-200 rounded-xl p-4 mb-6">
       <h3 className="text-sm font-semibold text-slate-900 mb-3">My Task Summary</h3>
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         <div className="text-center">
           <div className="text-2xl font-bold text-blue-600">{myAssignedTodos.length}</div>
           <div className="text-xs text-slate-600">Assigned to Me</div>
@@ -467,12 +720,95 @@ const DashboardSummary = ({
           </div>
           <div className="text-xs text-slate-600">Overdue</div>
         </div>
-      </div>
-      {myAssignedTodos.length === 0 && myCreatedTodos.length === 0 && (
-        <div className="text-center mt-3">
-          <p className="text-xs text-slate-500">No tasks assigned to you yet.</p>
+        <div className="text-center">
+          <div className="text-2xl font-bold text-amber-600">
+            {importantTodos.filter(t => t.assigned_to === user?.id).length}
+          </div>
+          <div className="text-xs text-slate-600">Important</div>
         </div>
-      )}
+      </div>
+    </div>
+  );
+};
+
+// Time Tracking Modal
+const TimeTrackingModal = ({ 
+  isOpen, 
+  onClose, 
+  todo,
+  timeEntries = []
+}: { 
+  isOpen: boolean;
+  onClose: () => void;
+  todo: Todo | null;
+  timeEntries: TimeEntry[];
+}) => {
+  const totalTime = calculateTotalTrackedTime(timeEntries);
+
+  if (!isOpen || !todo) return null;
+
+  return (
+    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+      <div className="bg-white rounded-2xl shadow-xl w-full max-w-2xl max-h-[80vh] overflow-y-auto">
+        <div className="flex justify-between items-center p-6 border-b border-slate-200 sticky top-0 bg-white z-10">
+          <h3 className="text-xl font-semibold text-slate-900">Time Tracking - {todo.title}</h3>
+          <button 
+            onClick={onClose}
+            className="text-slate-400 hover:text-slate-600 transition-colors p-1 rounded-lg"
+          >
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+        
+        <div className="p-6">
+          {/* Total Time Summary */}
+          <div className="bg-gradient-to-r from-blue-50 to-indigo-50 rounded-xl p-4 mb-6">
+            <div className="flex items-center justify-between">
+              <div>
+                <h4 className="text-sm font-semibold text-slate-900 mb-1">Total Time Tracked</h4>
+                <p className="text-2xl font-bold text-blue-600">{formatTime(totalTime)}</p>
+              </div>
+              <div className="w-12 h-12 bg-blue-100 rounded-full flex items-center justify-center">
+                <Clock className="w-6 h-6 text-blue-600" />
+              </div>
+            </div>
+          </div>
+
+          {/* Time Entries List */}
+          <div>
+            <h4 className="text-sm font-semibold text-slate-900 mb-4">Time Entries</h4>
+            {timeEntries.length === 0 ? (
+              <div className="text-center py-8 text-slate-500">
+                <Clock className="w-12 h-12 text-slate-300 mx-auto mb-3" />
+                <p className="text-sm">No time entries recorded yet</p>
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {timeEntries.map((entry, index) => (
+                  <div key={entry.id} className="flex items-center justify-between p-3 bg-slate-50 rounded-lg border border-slate-200">
+                    <div className="flex items-center gap-3">
+                      <div className="w-8 h-8 bg-blue-100 rounded-full flex items-center justify-center">
+                        <span className="text-xs font-semibold text-blue-600">{index + 1}</span>
+                      </div>
+                      <div>
+                        <p className="text-sm font-medium text-slate-900">
+                          {new Date(entry.start_time).toLocaleDateString()} at {new Date(entry.start_time).toLocaleTimeString()}
+                        </p>
+                        <p className="text-xs text-slate-500">
+                          Duration: {formatTime(entry.duration)}
+                        </p>
+                      </div>
+                    </div>
+                    <div className="text-right">
+                      <p className="text-sm font-semibold text-slate-900">{formatTime(entry.duration)}</p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
     </div>
   );
 };
@@ -485,71 +821,61 @@ export function TodoList() {
   const [teamMembers, setTeamMembers] = useState<TeamMember[]>([]);
   const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
+  const [editingTodo, setEditingTodo] = useState<Todo | null>(null);
+  const [showCompletionComment, setShowCompletionComment] = useState(false);
+  const [completingTodoId, setCompletingTodoId] = useState<string | null>(null);
   const [userRole, setUserRole] = useState<string>('user');
   const [roleLoading, setRoleLoading] = useState(true);
   
-  // Date filter states
+  // New state for enhanced features
+  const [activeTab, setActiveTab] = useState<(typeof TODO_CONSTANTS.tabs)[number]>('all');
+  const [currentPage, setCurrentPage] = useState(1);
+  const [activeTimer, setActiveTimer] = useState<ActiveTimer | null>(null);
+  const [showTimeTracking, setShowTimeTracking] = useState(false);
+  const [selectedTodoForTime, setSelectedTodoForTime] = useState<Todo | null>(null);
+  const [timeEntries, setTimeEntries] = useState<TimeEntry[]>([]);
+ const [viewMode, setViewMode] = useState<'grid' | 'list'>('list');
+  
+  // Filter states
   const [dateFilter, setDateFilter] = useState('all');
   const [customStartDate, setCustomStartDate] = useState('');
   const [customEndDate, setCustomEndDate] = useState('');
   const [showDateFilter, setShowDateFilter] = useState(false);
-
-  // Branch and Country filter states
   const [branchFilter, setBranchFilter] = useState('');
   const [countryFilter, setCountryFilter] = useState('');
+  const [statusFilter, setStatusFilter] = useState('');
+  const [categoryFilter, setCategoryFilter] = useState('');
+  const [importantFilter, setImportantFilter] = useState(false);
   const [availableBranches, setAvailableBranches] = useState<string[]>([]);
   const [showBranchCountryFilter, setShowBranchCountryFilter] = useState(false);
 
-  // Memoized handlers
-  const handleFormSubmit = useCallback(async (formData: FormData) => {
-    if (!user) return;
+  // Calculate pagination
+  const totalPages = Math.ceil(filteredTodos.length / TODO_CONSTANTS.itemsPerPage);
+  const startIndex = (currentPage - 1) * TODO_CONSTANTS.itemsPerPage;
+  const paginatedTodos = filteredTodos.slice(startIndex, startIndex + TODO_CONSTANTS.itemsPerPage);
 
-    try {
-      const { error } = await supabase.from('todos').insert([{
-        user_id: user.id,
-        title: formData.title,
-        priority: formData.priority,
-        due_date: formData.due_date || null,
-        assigned_to: formData.assigned_to || null,
-        branch_name: formData.branchName || null,
-        country: formData.country || null,
-        completed: false,
-      }]);
-
-      if (error) throw error;
-
-      fetchTodos();
-    } catch (error) {
-      console.error('Error creating todo:', error);
+  // Apply tab filters
+  const applyTabFilter = useCallback((todosToFilter: Todo[]) => {
+    switch (activeTab) {
+      case 'active':
+        return todosToFilter.filter(todo => !todo.completed);
+      case 'completed':
+        return todosToFilter.filter(todo => todo.completed);
+      case 'assigned-to-me':
+        return todosToFilter.filter(todo => todo.assigned_to === user?.id);
+      case 'created-by-me':
+        return todosToFilter.filter(todo => todo.user_id === user?.id);
+      case 'important':
+        return todosToFilter.filter(todo => todo.important);
+      default:
+        return todosToFilter;
     }
-  }, [user]);
-
-  const closeForm = useCallback(() => {
-    setShowForm(false);
-  }, []);
-
-  // Data fetching with user roles
-  useEffect(() => {
-    if (user) {
-      fetchUserRoleAndData();
-    }
-  }, [user]);
-
-  // Extract available branches from todos
-  useEffect(() => {
-    if (todos.length > 0) {
-      const branches = [...new Set(todos
-        .map(t => t.branch_name)
-        .filter(Boolean) as string[]
-      )].sort();
-      setAvailableBranches(branches);
-    }
-  }, [todos]);
+  }, [activeTab, user]);
 
   // Apply all filters when todos or filter settings change
   useEffect(() => {
     applyAllFilters();
-  }, [todos, dateFilter, customStartDate, customEndDate, branchFilter, countryFilter]);
+  }, [todos, dateFilter, customStartDate, customEndDate, branchFilter, countryFilter, statusFilter, categoryFilter, importantFilter, activeTab]);
 
   const applyAllFilters = useCallback(() => {
     if (!todos.length) {
@@ -558,6 +884,9 @@ export function TodoList() {
     }
 
     let filtered = [...todos];
+
+    // Apply tab filter first
+    filtered = applyTabFilter(filtered);
 
     // Apply date filter
     filtered = applyDateFilterToTodos(filtered);
@@ -574,8 +903,24 @@ export function TodoList() {
       filtered = filtered.filter(todo => todo.country === countryFilter);
     }
 
+    // Apply status filter
+    if (statusFilter) {
+      filtered = filtered.filter(todo => todo.status === statusFilter);
+    }
+
+    // Apply category filter
+    if (categoryFilter) {
+      filtered = filtered.filter(todo => todo.category === categoryFilter);
+    }
+
+    // Apply important filter
+    if (importantFilter) {
+      filtered = filtered.filter(todo => todo.important);
+    }
+
     setFilteredTodos(filtered);
-  }, [todos, dateFilter, customStartDate, customEndDate, branchFilter, countryFilter]);
+    setCurrentPage(1); // Reset to first page when filters change
+  }, [todos, dateFilter, customStartDate, customEndDate, branchFilter, countryFilter, statusFilter, categoryFilter, importantFilter, applyTabFilter]);
 
   const applyDateFilterToTodos = useCallback((todosToFilter: Todo[]) => {
     if (dateFilter === 'all') {
@@ -660,6 +1005,168 @@ export function TodoList() {
 
     return filtered;
   }, [dateFilter, customStartDate, customEndDate]);
+
+  // Time tracking functions
+  const startTimer = useCallback(async (todoId: string) => {
+    if (activeTimer) {
+      await stopTimer();
+    }
+
+    const startTime = new Date();
+    try {
+      const { data, error } = await supabase
+        .from('time_entries')
+        .insert([{
+          todo_id: todoId,
+          start_time: startTime.toISOString(),
+          end_time: null,
+          duration: 0
+        }])
+        .select()
+        .single();
+
+      if (error) throw error;
+
+      setActiveTimer({
+        todoId,
+        startTime,
+        entryId: data.id
+      });
+    } catch (error) {
+      console.error('Error starting timer:', error);
+    }
+  }, [activeTimer]);
+
+  const stopTimer = useCallback(async () => {
+    if (!activeTimer) return;
+
+    const endTime = new Date();
+    const duration = Math.floor((endTime.getTime() - activeTimer.startTime.getTime()) / 1000);
+
+    try {
+      const { error } = await supabase
+        .from('time_entries')
+        .update({
+          end_time: endTime.toISOString(),
+          duration
+        })
+        .eq('id', activeTimer.entryId);
+
+      if (error) throw error;
+
+      setActiveTimer(null);
+      fetchTodos(); // Refresh to update total time
+    } catch (error) {
+      console.error('Error stopping timer:', error);
+    }
+  }, [activeTimer]);
+
+  const fetchTimeEntries = useCallback(async (todoId: string) => {
+    try {
+      const { data, error } = await supabase
+        .from('time_entries')
+        .select('*')
+        .eq('todo_id', todoId)
+        .order('start_time', { ascending: false });
+
+      if (error) throw error;
+      setTimeEntries(data || []);
+    } catch (error) {
+      console.error('Error fetching time entries:', error);
+      setTimeEntries([]);
+    }
+  }, []);
+
+  const showTimeTrackingForTodo = useCallback(async (todo: Todo) => {
+    setSelectedTodoForTime(todo);
+    await fetchTimeEntries(todo.id);
+    setShowTimeTracking(true);
+  }, [fetchTimeEntries]);
+
+  // Memoized handlers (keep existing handlers, add new ones as needed)
+  const handleFormSubmit = useCallback(async (formData: FormData) => {
+    if (!user) return;
+
+    try {
+      const { error } = await supabase.from('todos').insert([{
+        user_id: user.id,
+        title: formData.title,
+        priority: formData.priority,
+        due_date: formData.due_date || null,
+        assigned_to: formData.assigned_to || null,
+        branch_name: formData.branchName || null,
+        country: formData.country || null,
+        status: formData.status,
+        important: formData.important,
+        category: formData.category,
+        repeat: formData.repeat,
+        completed: false,
+        completed_comment: null,
+        completed_at: null
+      }]);
+
+      if (error) throw error;
+
+      fetchTodos();
+    } catch (error) {
+      console.error('Error creating todo:', error);
+    }
+  }, [user]);
+
+  const handleUpdateTodo = useCallback(async (id: string, formData: FormData) => {
+    try {
+      const { error } = await supabase
+        .from('todos')
+        .update({
+          title: formData.title,
+          priority: formData.priority,
+          due_date: formData.due_date || null,
+          assigned_to: formData.assigned_to || null,
+          branch_name: formData.branchName || null,
+          country: formData.country || null,
+          status: formData.status,
+          important: formData.important,
+          category: formData.category,
+          repeat: formData.repeat,
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', id);
+
+      if (error) throw error;
+
+      fetchTodos();
+    } catch (error) {
+      console.error('Error updating todo:', error);
+    }
+  }, []);
+
+  const closeForm = useCallback(() => {
+    setShowForm(false);
+    setEditingTodo(null);
+  }, []);
+
+  const startEditTodo = useCallback((todo: Todo) => {
+    setEditingTodo(todo);
+    setShowForm(true);
+  }, []);
+
+  // Data fetching with user roles (keep existing implementation)
+  useEffect(() => {
+    if (user) {
+      fetchUserRoleAndData();
+    }
+  }, [user]);
+
+  // Extract available branches from todos
+  useEffect(() => {
+    if (todos.length > 0) {
+      const branches = [...new Set(todos
+        .map(t => t.branch_name)
+        .filter(Boolean) as string[]
+      )].sort();
+      setAvailableBranches(branches);
+    }
+  }, [todos]);
 
   const fetchUserRoleAndData = async () => {
     try {
@@ -788,157 +1295,175 @@ export function TodoList() {
   };
 
   const fetchTodos = async (role?: string) => {
-  const currentRole = role || userRole;
-  
-  try {
-    let data, error;
-
-    // Enhanced filtering logic for assigned tasks
-    if (!['admin', 'operations'].includes(currentRole) && user?.id) {
-      // Use TWO separate queries instead of .or() to avoid UUID/text error
-      const [createdResult, assignedResult] = await Promise.all([
-        supabase
-          .from('todos')
-          .select('*')
-          .eq('user_id', user.id),
-        supabase
-          .from('todos')
-          .select('*')
-          .eq('assigned_to', user.id)
-      ]);
-
-      if (createdResult.error) throw createdResult.error;
-      if (assignedResult.error) throw assignedResult.error;
-
-      // Merge and deduplicate by ID
-      const todoMap = new Map();
-      [...(createdResult.data || []), ...(assignedResult.data || [])].forEach(todo => {
-        todoMap.set(todo.id, todo);
-      });
-      
-      // Convert back to array and sort
-      data = Array.from(todoMap.values()).sort((a, b) => {
-        if (a.completed !== b.completed) return a.completed ? 1 : -1;
-        return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
-      });
-      
-      error = null;
-      
-      console.log('Fetching todos for user:', user?.id);
-      console.log('Filter: user_id OR assigned_to =', user?.id);
-    } else {
-      // For admin/operations, fetch all tasks
-      const { data: fetchedData, error: fetchError } = await supabase
-        .from('todos')
-        .select('*')
-        .order('completed', { ascending: true })
-        .order('created_at', { ascending: false });
-      
-      data = fetchedData;
-      error = fetchError;
-      
-      console.log('Fetching all todos for admin/operations role');
-    }
-
-    if (error) throw error;
-
-    console.log('Raw todos data:', data?.length);
+    const currentRole = role || userRole;
     
-    // Fetch user names for todos
-    const todosWithUserNames = await Promise.all(
-      (data || []).map(async (todo) => {
-        try {
-          // Get creator name
-          let creatorName = '';
-          try {
-            const { data: userData } = await supabase
-              .from('profiles')
-              .select('full_name, name')
-              .eq('id', todo.user_id)
-              .single();
-            
-            creatorName = userData?.full_name || userData?.name || '';
-            
-            if (!creatorName && supabaseAdmin) {
-              const { data: { user: creatorUser } } = await supabaseAdmin.auth.admin.getUserById(todo.user_id);
-              creatorName = creatorUser?.email ? creatorUser.email.split('@')[0] : '';
-            }
-          } catch (profileError) {
-            if (supabaseAdmin) {
-              try {
-                const { data: { user: creatorUser } } = await supabaseAdmin.auth.admin.getUserById(todo.user_id);
-                creatorName = creatorUser?.email ? creatorUser.email.split('@')[0] : '';
-              } catch (adminError) {
-                creatorName = `user_${todo.user_id.substring(0, 8)}`;
-              }
-            } else {
-              creatorName = `user_${todo.user_id.substring(0, 8)}`;
-            }
-          }
+    try {
+      let data, error;
 
-          // Get assigned user name if assigned
-          let assignedUserName = '';
-          if (todo.assigned_to) {
+      // Enhanced filtering logic for assigned tasks
+      if (!['admin', 'operations'].includes(currentRole) && user?.id) {
+        // Use TWO separate queries instead of .or() to avoid UUID/text error
+        const [createdResult, assignedResult] = await Promise.all([
+          supabase
+            .from('todos')
+            .select('*')
+            .eq('user_id', user.id),
+          supabase
+            .from('todos')
+            .select('*')
+            .eq('assigned_to', user.id)
+        ]);
+
+        if (createdResult.error) throw createdResult.error;
+        if (assignedResult.error) throw assignedResult.error;
+
+        // Merge and deduplicate by ID
+        const todoMap = new Map();
+        [...(createdResult.data || []), ...(assignedResult.data || [])].forEach(todo => {
+          todoMap.set(todo.id, todo);
+        });
+        
+        // Convert back to array and sort
+        data = Array.from(todoMap.values()).sort((a, b) => {
+          if (a.completed !== b.completed) return a.completed ? 1 : -1;
+          return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
+        });
+        
+        error = null;
+      } else {
+        // For admin/operations, fetch all tasks
+        const { data: fetchedData, error: fetchError } = await supabase
+          .from('todos')
+          .select('*')
+          .order('completed', { ascending: true })
+          .order('created_at', { ascending: false });
+        
+        data = fetchedData;
+        error = fetchError;
+      }
+
+      if (error) throw error;
+
+      // Fetch user names for todos and time entries
+      const todosWithUserNamesAndTime = await Promise.all(
+        (data || []).map(async (todo) => {
+          try {
+            // Get creator name
+            let creatorName = '';
             try {
-              const { data: assignedUserData } = await supabase
+              const { data: userData } = await supabase
                 .from('profiles')
                 .select('full_name, name')
-                .eq('id', todo.assigned_to)
+                .eq('id', todo.user_id)
                 .single();
               
-              assignedUserName = assignedUserData?.full_name || assignedUserData?.name || '';
+              creatorName = userData?.full_name || userData?.name || '';
               
-              if (!assignedUserName && supabaseAdmin) {
-                const { data: { user: assignedUser } } = await supabaseAdmin.auth.admin.getUserById(todo.assigned_to);
-                assignedUserName = assignedUser?.email ? assignedUser.email.split('@')[0] : '';
+              if (!creatorName && supabaseAdmin) {
+                const { data: { user: creatorUser } } = await supabaseAdmin.auth.admin.getUserById(todo.user_id);
+                creatorName = creatorUser?.email ? creatorUser.email.split('@')[0] : '';
               }
             } catch (profileError) {
               if (supabaseAdmin) {
                 try {
-                  const { data: { user: assignedUser } } = await supabaseAdmin.auth.admin.getUserById(todo.assigned_to);
-                  assignedUserName = assignedUser?.email ? assignedUser.email.split('@')[0] : '';
+                  const { data: { user: creatorUser } } = await supabaseAdmin.auth.admin.getUserById(todo.user_id);
+                  creatorName = creatorUser?.email ? creatorUser.email.split('@')[0] : '';
                 } catch (adminError) {
-                  assignedUserName = `user_${todo.assigned_to.substring(0, 8)}`;
+                  creatorName = `user_${todo.user_id.substring(0, 8)}`;
                 }
               } else {
-                assignedUserName = `user_${todo.assigned_to.substring(0, 8)}`;
+                creatorName = `user_${todo.user_id.substring(0, 8)}`;
               }
             }
+
+            // Get assigned user name if assigned
+            let assignedUserName = '';
+            if (todo.assigned_to) {
+              try {
+                const { data: assignedUserData } = await supabase
+                  .from('profiles')
+                  .select('full_name, name')
+                  .eq('id', todo.assigned_to)
+                  .single();
+                
+                assignedUserName = assignedUserData?.full_name || assignedUserData?.name || '';
+                
+                if (!assignedUserName && supabaseAdmin) {
+                  const { data: { user: assignedUser } } = await supabaseAdmin.auth.admin.getUserById(todo.assigned_to);
+                  assignedUserName = assignedUser?.email ? assignedUser.email.split('@')[0] : '';
+                }
+              } catch (profileError) {
+                if (supabaseAdmin) {
+                  try {
+                    const { data: { user: assignedUser } } = await supabaseAdmin.auth.admin.getUserById(todo.assigned_to);
+                    assignedUserName = assignedUser?.email ? assignedUser.email.split('@')[0] : '';
+                  } catch (adminError) {
+                    assignedUserName = `user_${todo.assigned_to.substring(0, 8)}`;
+                  }
+                } else {
+                  assignedUserName = `user_${todo.assigned_to.substring(0, 8)}`;
+                }
+              }
+            }
+
+            // Fetch time entries for this todo
+            let timeEntries: TimeEntry[] = [];
+            let totalTimeTracked = 0;
+            try {
+              const { data: timeData } = await supabase
+                .from('time_entries')
+                .select('*')
+                .eq('todo_id', todo.id)
+                .order('start_time', { ascending: false });
+
+              timeEntries = timeData || [];
+              totalTimeTracked = calculateTotalTrackedTime(timeEntries);
+            } catch (timeError) {
+              console.error('Error fetching time entries:', timeError);
+            }
+
+            return {
+              ...todo,
+              user_name: creatorName,
+              assigned_user_name: assignedUserName,
+              // Ensure default values for new fields
+              status: todo.status || 'not-started',
+              important: todo.important || false,
+              category: todo.category || 'other',
+              repeat: todo.repeat || 'none',
+              completed_comment: todo.completed_comment || null,
+              completed_at: todo.completed_at || null,
+              time_tracked: totalTimeTracked,
+              time_entries: timeEntries
+            };
+          } catch (error) {
+            console.error('Error fetching user data for todo:', error);
+            return {
+              ...todo,
+              user_name: `user_${todo.user_id.substring(0, 8)}`,
+              assigned_user_name: todo.assigned_to ? `user_${todo.assigned_to.substring(0, 8)}` : '',
+              status: todo.status || 'not-started',
+              important: todo.important || false,
+              category: todo.category || 'other',
+              repeat: todo.repeat || 'none',
+              completed_comment: todo.completed_comment || null,
+              completed_at: todo.completed_at || null,
+              time_tracked: 0,
+              time_entries: []
+            };
           }
+        })
+      );
 
-          return {
-            ...todo,
-            user_name: creatorName,
-            assigned_user_name: assignedUserName
-          };
-        } catch (error) {
-          console.error('Error fetching user data for todo:', error);
-          return {
-            ...todo,
-            user_name: `user_${todo.user_id.substring(0, 8)}`,
-            assigned_user_name: todo.assigned_to ? `user_${todo.assigned_to.substring(0, 8)}` : ''
-          };
-        }
-      })
-    );
-
-    // Log filtered results for debugging
-    console.log('Processed todos:', todosWithUserNames.length);
-    if (!['admin', 'operations'].includes(currentRole)) {
-      const assignedTodos = todosWithUserNames.filter(t => t.assigned_to === user?.id);
-      const createdTodos = todosWithUserNames.filter(t => t.user_id === user?.id);
-      console.log(`Assigned to user: ${assignedTodos.length}, Created by user: ${createdTodos.length}`);
+      setTodos(todosWithUserNamesAndTime);
+    } catch (error) {
+      console.error('Error fetching todos:', error);
+    } finally {
+      setLoading(false);
     }
+  };
 
-    setTodos(todosWithUserNames);
-  } catch (error) {
-    console.error('Error fetching todos:', error);
-  } finally {
-    setLoading(false);
-  }
-};
-
-  // Permission checks
+  // Permission checks (keep existing)
   const canManageAllTasks = useCallback((role = userRole) => {
     return ['admin', 'operations'].includes(role);
   }, [userRole]);
@@ -952,7 +1477,7 @@ export function TodoList() {
     return todo.user_id === user?.id;
   }, [userRole, user]);
 
-  // Filter reset functions
+  // Filter reset functions (keep existing)
   const resetDateFilter = useCallback(() => {
     setDateFilter('all');
     setCustomStartDate('');
@@ -964,33 +1489,86 @@ export function TodoList() {
     setCountryFilter('');
   }, []);
 
+  const resetStatusCategoryFilter = useCallback(() => {
+    setStatusFilter('');
+    setCategoryFilter('');
+    setImportantFilter(false);
+  }, []);
+
   const resetAllFilters = useCallback(() => {
     resetDateFilter();
     resetBranchCountryFilter();
-  }, [resetDateFilter, resetBranchCountryFilter]);
+    resetStatusCategoryFilter();
+  }, [resetDateFilter, resetBranchCountryFilter, resetStatusCategoryFilter]);
 
   const hasActiveFilters = useCallback(() => {
-    return dateFilter !== 'all' || branchFilter || countryFilter;
-  }, [dateFilter, branchFilter, countryFilter]);
+    return dateFilter !== 'all' || branchFilter || countryFilter || statusFilter || categoryFilter || importantFilter;
+  }, [dateFilter, branchFilter, countryFilter, statusFilter, categoryFilter, importantFilter]);
 
-  // Todo actions
+  // Todo actions (keep existing, add time tracking)
   const toggleComplete = useCallback(async (id: string, completed: boolean) => {
+    if (activeTimer?.todoId === id) {
+      await stopTimer();
+    }
+
+    if (!completed) {
+      // If marking as complete, show comment modal
+      setCompletingTodoId(id);
+      setShowCompletionComment(true);
+    } else {
+      // If marking as incomplete, just update status
+      try {
+        const { error } = await supabase
+          .from('todos')
+          .update({ 
+            completed: false,
+            status: 'not-started',
+            completed_comment: null,
+            completed_at: null,
+            updated_at: new Date().toISOString() 
+          })
+          .eq('id', id);
+        if (error) throw error;
+        fetchTodos();
+      } catch (error) {
+        console.error('Error updating todo:', error);
+      }
+    }
+  }, [activeTimer, stopTimer]);
+
+  const handleCompleteWithComment = useCallback(async (comment: string) => {
+    if (!completingTodoId) return;
+
+    if (activeTimer?.todoId === completingTodoId) {
+      await stopTimer();
+    }
+
     try {
       const { error } = await supabase
         .from('todos')
         .update({ 
-          completed: !completed, 
+          completed: true,
+          status: 'completed',
+          completed_comment: comment,
+          completed_at: new Date().toISOString(),
           updated_at: new Date().toISOString() 
         })
-        .eq('id', id);
+        .eq('id', completingTodoId);
       if (error) throw error;
       fetchTodos();
     } catch (error) {
-      console.error('Error updating todo:', error);
+      console.error('Error completing todo:', error);
+    } finally {
+      setShowCompletionComment(false);
+      setCompletingTodoId(null);
     }
-  }, []);
+  }, [completingTodoId, activeTimer, stopTimer]);
 
   const handleDelete = useCallback(async (id: string) => {
+    if (activeTimer?.todoId === id) {
+      await stopTimer();
+    }
+
     if (!confirm('Are you sure you want to delete this task?')) return;
     
     try {
@@ -1000,7 +1578,7 @@ export function TodoList() {
     } catch (error) {
       console.error('Error deleting todo:', error);
     }
-  }, []);
+  }, [activeTimer, stopTimer]);
 
   const reassignTask = useCallback(async (id: string, assigned_to: string | null) => {
     try {
@@ -1015,6 +1593,38 @@ export function TodoList() {
       fetchTodos();
     } catch (error) {
       console.error('Error reassigning task:', error);
+    }
+  }, []);
+
+  const toggleImportant = useCallback(async (id: string, important: boolean) => {
+    try {
+      const { error } = await supabase
+        .from('todos')
+        .update({ 
+          important: !important,
+          updated_at: new Date().toISOString() 
+        })
+        .eq('id', id);
+      if (error) throw error;
+      fetchTodos();
+    } catch (error) {
+      console.error('Error toggling important:', error);
+    }
+  }, []);
+
+  const updateStatus = useCallback(async (id: string, status: string) => {
+    try {
+      const { error } = await supabase
+        .from('todos')
+        .update({ 
+          status,
+          updated_at: new Date().toISOString() 
+        })
+        .eq('id', id);
+      if (error) throw error;
+      fetchTodos();
+    } catch (error) {
+      console.error('Error updating status:', error);
     }
   }, []);
 
@@ -1039,9 +1649,12 @@ export function TodoList() {
           : 'Try adjusting your filters to see more results'
         }
       </p>
-      {todos.length > 0 && hasActiveFilters() && (
+      {todos.length > 0 && (hasActiveFilters() || activeTab !== 'all') && (
         <button
-          onClick={resetAllFilters}
+          onClick={() => {
+            resetAllFilters();
+            setActiveTab('all');
+          }}
           className="mt-4 text-blue-500 hover:text-blue-700 text-xs font-medium"
         >
           Clear all filters
@@ -1050,24 +1663,119 @@ export function TodoList() {
     </div>
   );
 
-  const BranchCountryFilterDropdown = () => (
+  // Tabs Component
+  const Tabs = () => (
+    <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-xl mb-6">
+      {[
+        { id: 'all', label: 'All Tasks', count: todos.length },
+        { id: 'active', label: 'Active', count: todos.filter(t => !t.completed).length },
+        { id: 'completed', label: 'Completed', count: todos.filter(t => t.completed).length },
+        { id: 'assigned-to-me', label: 'Assigned to Me', count: todos.filter(t => t.assigned_to === user?.id).length },
+        { id: 'created-by-me', label: 'Created by Me', count: todos.filter(t => t.user_id === user?.id).length },
+        { id: 'important', label: 'Important', count: todos.filter(t => t.important).length },
+      ].map((tab) => (
+        <button
+          key={tab.id}
+          onClick={() => setActiveTab(tab.id as any)}
+          className={`flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-semibold transition-all ${
+            activeTab === tab.id
+              ? 'bg-white text-slate-900 shadow-sm'
+              : 'text-slate-600 hover:text-slate-900'
+          }`}
+        >
+          {tab.label}
+          <span className={`px-1.5 py-0.5 rounded-full text-xs ${
+            activeTab === tab.id
+              ? 'bg-blue-100 text-blue-700'
+              : 'bg-slate-200 text-slate-600'
+          }`}>
+            {tab.count}
+          </span>
+        </button>
+      ))}
+    </div>
+  );
+
+  // Pagination Component
+  const Pagination = () => {
+    if (totalPages <= 1) return null;
+
+    return (
+      <div className="flex items-center justify-between pt-6 border-t border-slate-200">
+        <div className="text-xs text-slate-500">
+          Showing {startIndex + 1}-{Math.min(startIndex + TODO_CONSTANTS.itemsPerPage, filteredTodos.length)} of {filteredTodos.length} tasks
+        </div>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => setCurrentPage(prev => Math.max(prev - 1, 1))}
+            disabled={currentPage === 1}
+            className="flex items-center gap-1 px-3 py-2 rounded-lg text-xs font-semibold disabled:opacity-50 disabled:cursor-not-allowed bg-slate-100 hover:bg-slate-200 text-slate-700 transition-all"
+          >
+            <ChevronLeft className="w-4 h-4" />
+            Previous
+          </button>
+          
+          <div className="flex items-center gap-1">
+            {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
+              let pageNum;
+              if (totalPages <= 5) {
+                pageNum = i + 1;
+              } else if (currentPage <= 3) {
+                pageNum = i + 1;
+              } else if (currentPage >= totalPages - 2) {
+                pageNum = totalPages - 4 + i;
+              } else {
+                pageNum = currentPage - 2 + i;
+              }
+
+              return (
+                <button
+                  key={pageNum}
+                  onClick={() => setCurrentPage(pageNum)}
+                  className={`w-8 h-8 rounded-lg text-xs font-semibold transition-all ${
+                    currentPage === pageNum
+                      ? 'bg-blue-500 text-white'
+                      : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+                  }`}
+                >
+                  {pageNum}
+                </button>
+              );
+            })}
+          </div>
+
+          <button
+            onClick={() => setCurrentPage(prev => Math.min(prev + 1, totalPages))}
+            disabled={currentPage === totalPages}
+            className="flex items-center gap-1 px-3 py-2 rounded-lg text-xs font-semibold disabled:opacity-50 disabled:cursor-not-allowed bg-slate-100 hover:bg-slate-200 text-slate-700 transition-all"
+          >
+            Next
+            <ChevronRight className="w-4 h-4" />
+          </button>
+        </div>
+      </div>
+    );
+  };
+
+  // StatusCategoryFilterDropdown (keep existing implementation)
+  const StatusCategoryFilterDropdown = () => (
     <div className="relative">
       <button
         onClick={() => setShowBranchCountryFilter(!showBranchCountryFilter)}
         className="flex items-center gap-2 bg-white hover:bg-slate-50 text-slate-700 px-4 py-2.5 rounded-xl font-semibold shadow-md hover:shadow-lg transition-all border border-slate-200 text-xs"
       >
-        <Building className="w-4 h-4" />
-        Branch & Country
-        {(branchFilter || countryFilter) && (
+        <Filter className="w-4 h-4" />
+        Status & Category
+        {(statusFilter || categoryFilter || importantFilter) && (
           <span className="bg-blue-500 text-white rounded-full w-2 h-2"></span>
         )}
       </button>
 
-      {/* Branch & Country Filter Dropdown */}
+      {/* Status & Category Filter Dropdown */}
       {showBranchCountryFilter && (
         <div className="absolute top-full right-0 mt-2 bg-white rounded-2xl shadow-xl border border-slate-200 p-4 w-80 z-50">
           <div className="flex justify-between items-center mb-4">
-            <h3 className="text-sm font-semibold text-slate-900">Filter by Branch & Country</h3>
+            <h3 className="text-sm font-semibold text-slate-900">Filter by Status & Category</h3>
             <button 
               onClick={() => setShowBranchCountryFilter(false)}
               className="text-slate-400 hover:text-slate-600 transition-colors p-1 rounded-lg"
@@ -1076,78 +1784,95 @@ export function TodoList() {
             </button>
           </div>
 
-          {/* Branch Filter - Fixed with direct state update */}
+          {/* Status Filter */}
           <div className="mb-4">
-            <label className="block text-xs font-semibold text-slate-700 mb-2">Branch Name</label>
-            <input
-              type="text"
-              value={branchFilter}
-              onChange={(e) => setBranchFilter(e.target.value)}
-              placeholder="Search branch name..."
-              className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all text-xs"
-            />
-            {availableBranches.length > 0 && (
-              <div className="mt-2 max-h-32 overflow-y-auto">
-                {availableBranches.map(branch => (
-                  <button
-                    key={branch}
-                    onClick={() => setBranchFilter(branch)}
-                    className={`w-full text-left px-2 py-1.5 rounded text-xs transition-all ${
-                      branchFilter === branch
-                        ? 'bg-blue-50 text-blue-700'
-                        : 'text-slate-600 hover:bg-slate-50'
-                    }`}
-                  >
-                    {branch}
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
-
-          {/* Country Filter */}
-          <div className="mb-4">
-            <label className="block text-xs font-semibold text-slate-700 mb-2">Country</label>
+            <label className="block text-xs font-semibold text-slate-700 mb-2">Status</label>
             <select
-              value={countryFilter}
-              onChange={(e) => setCountryFilter(e.target.value)}
+              value={statusFilter}
+              onChange={(e) => setStatusFilter(e.target.value)}
               className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all text-xs"
             >
-              <option value="">All Countries</option>
-              {TODO_CONSTANTS.countries.map(country => (
-                <option key={country.code} value={country.code}>
-                  {country.name}
+              <option value="">All Statuses</option>
+              {TODO_CONSTANTS.statuses.map(status => (
+                <option key={status} value={status}>
+                  {status.split('-').map(word => word.charAt(0).toUpperCase() + word.slice(1)).join(' ')}
                 </option>
               ))}
             </select>
           </div>
 
+          {/* Category Filter */}
+          <div className="mb-4">
+            <label className="block text-xs font-semibold text-slate-700 mb-2">Category</label>
+            <select
+              value={categoryFilter}
+              onChange={(e) => setCategoryFilter(e.target.value)}
+              className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all text-xs"
+            >
+              <option value="">All Categories</option>
+              {TODO_CONSTANTS.categories.map(category => (
+                <option key={category} value={category}>
+                  {category.charAt(0).toUpperCase() + category.slice(1)}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {/* Important Filter */}
+          <div className="flex items-center justify-between p-3 bg-slate-50 border border-slate-200 rounded-lg mb-4">
+            <div className="flex items-center gap-2">
+              <Star className={`w-4 h-4 ${importantFilter ? 'text-amber-500 fill-amber-500' : 'text-slate-400'}`} />
+              <span className="text-xs font-semibold text-slate-700">Important Tasks Only</span>
+            </div>
+            <button
+              type="button"
+              onClick={() => setImportantFilter(!importantFilter)}
+              className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
+                importantFilter ? 'bg-amber-500' : 'bg-slate-300'
+              }`}
+            >
+              <span
+                className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                  importantFilter ? 'translate-x-6' : 'translate-x-1'
+                }`}
+              />
+            </button>
+          </div>
+
           {/* Active Filter Info */}
-          {(branchFilter || countryFilter) && (
+          {(statusFilter || categoryFilter || importantFilter) && (
             <div className="pt-3 border-t border-slate-200">
               <div className="flex flex-wrap gap-2 mb-3">
-                {branchFilter && (
+                {statusFilter && (
                   <span className="inline-flex items-center gap-1 px-2 py-1 bg-blue-50 text-blue-700 rounded text-xs">
-                    Branch: {branchFilter}
-                    <button onClick={() => setBranchFilter('')} className="text-blue-500 hover:text-blue-700">
+                    Status: {statusFilter.split('-').map(word => word.charAt(0).toUpperCase() + word.slice(1)).join(' ')}
+                    <button onClick={() => setStatusFilter('')} className="text-blue-500 hover:text-blue-700">
                       <X className="w-3 h-3" />
                     </button>
                   </span>
                 )}
-                {countryFilter && (
+                {categoryFilter && (
                   <span className="inline-flex items-center gap-1 px-2 py-1 bg-purple-50 text-purple-700 rounded text-xs">
-                    Country: {getCountryName(countryFilter)}
-                    <button onClick={() => setCountryFilter('')} className="text-purple-500 hover:text-purple-700">
+                    Category: {categoryFilter.charAt(0).toUpperCase() + categoryFilter.slice(1)}
+                    <button onClick={() => setCategoryFilter('')} className="text-purple-500 hover:text-purple-700">
+                      <X className="w-3 h-3" />
+                    </button>
+                  </span>
+                )}
+                {importantFilter && (
+                  <span className="inline-flex items-center gap-1 px-2 py-1 bg-amber-50 text-amber-700 rounded text-xs">
+                    Important
+                    <button onClick={() => setImportantFilter(false)} className="text-amber-500 hover:text-amber-700">
                       <X className="w-3 h-3" />
                     </button>
                   </span>
                 )}
               </div>
               <button
-                onClick={resetBranchCountryFilter}
+                onClick={resetStatusCategoryFilter}
                 className="text-blue-500 hover:text-blue-700 text-xs font-medium"
               >
-                Clear branch & country filters
+                Clear status & category filters
               </button>
             </div>
           )}
@@ -1162,8 +1887,8 @@ export function TodoList() {
         onClick={() => setShowDateFilter(!showDateFilter)}
         className="flex items-center gap-2 bg-white hover:bg-slate-50 text-slate-700 px-4 py-2.5 rounded-xl font-semibold shadow-md hover:shadow-lg transition-all border border-slate-200 text-xs"
       >
-        <Filter className="w-4 h-4" />
-        Filter by Date
+        <Calendar className="w-4 h-4" />
+        Date Filter
         {dateFilter !== 'all' && (
           <span className="bg-blue-500 text-white rounded-full w-2 h-2"></span>
         )}
@@ -1264,14 +1989,17 @@ export function TodoList() {
   const TodoItem = ({ todo }: { todo: Todo }) => {
     const isAssignedToMe = todo.assigned_to === user?.id;
     const isCreatedByMe = todo.user_id === user?.id;
+    const isTimerRunning = activeTimer?.todoId === todo.id;
     
     return (
       <div
         className={`group bg-white/70 backdrop-blur-xl rounded-2xl shadow-md hover:shadow-xl p-5 border border-slate-200/60 transition-all duration-300 hover:scale-[1.02] flex flex-col h-full ${
           todo.completed ? 'opacity-60 hover:opacity-100' : ''
-        } ${isAssignedToMe ? 'border-l-4 border-l-blue-500' : ''}`}
+        } ${isAssignedToMe ? 'border-l-4 border-l-blue-500' : ''} ${
+          todo.important ? 'bg-orange-100/30' : ''
+        } ${isTimerRunning ? 'border-t-4 border-t-green-500' : ''}`}
       >
-        {/* Header with title and delete button */}
+        {/* Header with title and actions */}
         <div className="flex justify-between items-start mb-3">
           <div className="flex items-center gap-2 flex-1 pr-2">
             <button
@@ -1313,18 +2041,94 @@ export function TodoList() {
               </div>
             </div>
           </div>
-          {canDeleteTask(todo) && (
+          <div className="flex items-center gap-1">
+            {/* Time Tracking Button */}
             <button
-              onClick={() => handleDelete(todo.id)}
-              className="text-slate-400 hover:text-red-500 transition-all p-1.5 rounded-lg hover:bg-red-50 opacity-0 group-hover:opacity-100 flex-shrink-0"
+              onClick={() => showTimeTrackingForTodo(todo)}
+              className="text-slate-400 hover:text-indigo-500 transition-all p-1.5 rounded-lg hover:bg-indigo-50 opacity-0 group-hover:opacity-100 flex-shrink-0"
+              title="View time tracking"
             >
-              <Trash2 className="w-3.5 h-3.5" />
+              <Clock className="w-3.5 h-3.5" />
             </button>
-          )}
+
+            {/* Timer Control */}
+            {!todo.completed && (
+              <button
+                onClick={async () => {
+                  if (isTimerRunning) {
+                    await stopTimer();
+                  } else {
+                    await startTimer(todo.id);
+                  }
+                }}
+                className={`transition-all p-1.5 rounded-lg opacity-0 group-hover:opacity-100 flex-shrink-0 ${
+                  isTimerRunning
+                    ? 'text-red-500 hover:text-red-600 hover:bg-red-50'
+                    : 'text-slate-400 hover:text-green-500 hover:bg-green-50'
+                }`}
+                title={isTimerRunning ? 'Stop timer' : 'Start timer'}
+              >
+                {isTimerRunning ? (
+                  <Square className="w-3.5 h-3.5" />
+                ) : (
+                  <Play className="w-3.5 h-3.5" />
+                )}
+              </button>
+            )}
+
+            <button
+              onClick={() => startEditTodo(todo)}
+              className="text-slate-400 hover:text-blue-500 transition-all p-1.5 rounded-lg hover:bg-blue-50 opacity-0 group-hover:opacity-100 flex-shrink-0"
+              title="Edit task"
+            >
+              <Edit3 className="w-3.5 h-3.5" />
+            </button>
+            <button
+              onClick={() => toggleImportant(todo.id, todo.important)}
+              className={`transition-all p-1.5 rounded-lg hover:bg-amber-50 opacity-0 group-hover:opacity-100 flex-shrink-0 ${
+                todo.important 
+                  ? 'text-amber-500 hover:text-amber-600' 
+                  : 'text-slate-400 hover:text-amber-500'
+              }`}
+              title={todo.important ? 'Remove from important' : 'Mark as important'}
+            >
+              <Star className={`w-3.5 h-3.5 ${todo.important ? 'fill-amber-500' : ''}`} />
+            </button>
+            {canDeleteTask(todo) && (
+              <button
+                onClick={() => handleDelete(todo.id)}
+                className="text-slate-400 hover:text-red-500 transition-all p-1.5 rounded-lg hover:bg-red-50 opacity-0 group-hover:opacity-100 flex-shrink-0"
+                title="Delete task"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+              </button>
+            )}
+          </div>
         </div>
 
         {/* Tags */}
         <div className="flex flex-wrap gap-1.5 mb-4">
+          {/* Status Badge */}
+          <div className="relative">
+            <select
+              value={todo.status}
+              onChange={(e) => updateStatus(todo.id, e.target.value)}
+              disabled={todo.completed}
+              className={`inline-flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-semibold border cursor-pointer appearance-none pr-6 ${
+                todo.completed ? 'cursor-not-allowed opacity-50' : ''
+              } ${getStatusColor(todo.status)}`}
+            >
+              {TODO_CONSTANTS.statuses.map(status => (
+                <option key={status} value={status}>
+                  {status.split('-').map(word => word.charAt(0).toUpperCase() + word.slice(1)).join(' ')}
+                </option>
+              ))}
+            </select>
+            {!todo.completed && (
+              <ChevronDown className="absolute right-1 top-1/2 -translate-y-1/2 w-3 h-3 pointer-events-none" />
+            )}
+          </div>
+
           <span className={`inline-flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-semibold border ${getPriorityColor(todo.priority)}`}>
             <span className={`w-1.5 h-1.5 rounded-full ${getPriorityDot(todo.priority)}`} />
             {todo.priority}
@@ -1348,6 +2152,36 @@ export function TodoList() {
             }`}>
               <Calendar className="w-3 h-3" />
               {new Date(todo.due_date).toLocaleDateString()}
+            </span>
+          )}
+
+          {/* Category Tag */}
+          <span className={`inline-flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-semibold border ${getCategoryColor(todo.category)}`}>
+            <Tag className="w-3 h-3" />
+            {todo.category.charAt(0).toUpperCase() + todo.category.slice(1)}
+          </span>
+
+          {/* Repeat Tag */}
+          {todo.repeat !== 'none' && (
+            <span className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-indigo-50 text-indigo-700 text-xs font-semibold border border-indigo-200">
+              <Repeat className="w-3 h-3" />
+              {todo.repeat}ly
+            </span>
+          )}
+
+          {/* Time Tracked Tag */}
+          {todo.time_tracked && todo.time_tracked > 0 && (
+            <span className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-indigo-50 text-indigo-700 text-xs font-semibold border border-indigo-200">
+              <Clock className="w-3 h-3" />
+              {formatTime(todo.time_tracked)}
+            </span>
+          )}
+
+          {/* Active Timer Badge */}
+          {isTimerRunning && (
+            <span className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-green-50 text-green-700 text-xs font-semibold border border-green-200 animate-pulse">
+              <Play className="w-3 h-3" />
+              Timing...
             </span>
           )}
 
@@ -1383,6 +2217,22 @@ export function TodoList() {
             </>
           )}
         </div>
+
+        {/* Completion Comment */}
+        {todo.completed && todo.completed_comment && (
+          <div className="mb-3 p-3 bg-green-50 border border-green-200 rounded-lg">
+            <div className="flex items-center gap-2 mb-1">
+              <MessageSquare className="w-3 h-3 text-green-600" />
+              <span className="text-xs font-semibold text-green-700">Completion Notes</span>
+            </div>
+            <p className="text-xs text-green-600">{todo.completed_comment}</p>
+            {todo.completed_at && (
+              <p className="text-xs text-green-500 mt-1">
+                Completed on {new Date(todo.completed_at).toLocaleDateString()}
+              </p>
+            )}
+          </div>
+        )}
 
         {/* Assignment Section */}
         <div className="mt-auto pt-3 border-t border-slate-100">
@@ -1426,9 +2276,6 @@ export function TodoList() {
 
   if (loading) return <LoadingSpinner />;
 
-  const activeTodos = filteredTodos.filter((t) => !t.completed);
-  const completedTodos = filteredTodos.filter((t) => t.completed);
-
   return (
     <div className="space-y-6">
       <div className="flex justify-between items-center">
@@ -1436,7 +2283,7 @@ export function TodoList() {
           <h2 className="text-2xl font-semibold text-slate-900 mb-1">Task Management</h2>
           <div className="flex items-center gap-2">
             <p className="text-xs text-slate-500">
-              {activeTodos.length} active • {completedTodos.length} completed • {teamMembers.length} team members
+              {filteredTodos.length} tasks • {teamMembers.length} team members
               {!canManageAllTasks() && ' (only your tasks)'}
             </p>
             <span className={`inline-flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-semibold border ${getRoleColor(userRole)}`}>
@@ -1447,8 +2294,34 @@ export function TodoList() {
           </div>
         </div>
         <div className="flex items-center gap-3">
-          {/* Branch & Country Filter */}
-          <BranchCountryFilterDropdown />
+          {/* View Mode Toggle */}
+          <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-xl">
+            <button
+              onClick={() => setViewMode('grid')}
+              className={`p-2 rounded-lg transition-all ${
+                viewMode === 'grid'
+                  ? 'bg-white text-slate-900 shadow-sm'
+                  : 'text-slate-600 hover:text-slate-900'
+              }`}
+              title="Grid View"
+            >
+              <Grid className="w-4 h-4" />
+            </button>
+            <button
+              onClick={() => setViewMode('list')}
+              className={`p-2 rounded-lg transition-all ${
+                viewMode === 'list'
+                  ? 'bg-white text-slate-900 shadow-sm'
+                  : 'text-slate-600 hover:text-slate-900'
+              }`}
+              title="List View"
+            >
+              <List className="w-4 h-4" />
+            </button>
+          </div>
+
+          {/* Status & Category Filter */}
+          <StatusCategoryFilterDropdown />
 
           {/* Date Filter */}
           <DateFilterDropdown />
@@ -1481,6 +2354,9 @@ export function TodoList() {
         canManageAllTasks={canManageAllTasks()}
       />
 
+      {/* Tabs */}
+      <Tabs />
+
       {/* Active Filters Display */}
       {hasActiveFilters() && (
         <div className="bg-blue-50 border border-blue-200 rounded-xl p-4">
@@ -1498,20 +2374,29 @@ export function TodoList() {
                     </button>
                   </span>
                 )}
-                {branchFilter && (
+                {statusFilter && (
                   <span className="inline-flex items-center gap-1 px-2 py-1 bg-blue-100 text-blue-700 rounded-lg text-xs font-medium">
-                    <Building className="w-3 h-3" />
-                    Branch: {branchFilter}
-                    <button onClick={() => setBranchFilter('')} className="text-blue-500 hover:text-blue-700">
+                    {getStatusIcon(statusFilter)}
+                    Status: {statusFilter.split('-').map(word => word.charAt(0).toUpperCase() + word.slice(1)).join(' ')}
+                    <button onClick={() => setStatusFilter('')} className="text-blue-500 hover:text-blue-700">
                       <X className="w-3 h-3" />
                     </button>
                   </span>
                 )}
-                {countryFilter && (
+                {categoryFilter && (
                   <span className="inline-flex items-center gap-1 px-2 py-1 bg-purple-100 text-purple-700 rounded-lg text-xs font-medium">
-                    <Globe className="w-3 h-3" />
-                    Country: {getCountryName(countryFilter)}
-                    <button onClick={() => setCountryFilter('')} className="text-purple-500 hover:text-purple-700">
+                    <Tag className="w-3 h-3" />
+                    Category: {categoryFilter.charAt(0).toUpperCase() + categoryFilter.slice(1)}
+                    <button onClick={() => setCategoryFilter('')} className="text-purple-500 hover:text-purple-700">
+                      <X className="w-3 h-3" />
+                    </button>
+                  </span>
+                )}
+                {importantFilter && (
+                  <span className="inline-flex items-center gap-1 px-2 py-1 bg-amber-100 text-amber-700 rounded-lg text-xs font-medium">
+                    <Star className="w-3 h-3 fill-amber-500" />
+                    Important Only
+                    <button onClick={() => setImportantFilter(false)} className="text-amber-500 hover:text-amber-700">
                       <X className="w-3 h-3" />
                     </button>
                   </span>
@@ -1532,18 +2417,44 @@ export function TodoList() {
         isOpen={showForm}
         onClose={closeForm}
         onSubmit={handleFormSubmit}
+        onUpdate={handleUpdateTodo}
         teamMembers={teamMembers}
         user={user}
+        editingTodo={editingTodo}
+      />
+
+      <CompletionCommentModal
+        isOpen={showCompletionComment}
+        onClose={() => {
+          setShowCompletionComment(false);
+          setCompletingTodoId(null);
+        }}
+        onSubmit={handleCompleteWithComment}
+      />
+
+      <TimeTrackingModal
+        isOpen={showTimeTracking}
+        onClose={() => {
+          setShowTimeTracking(false);
+          setSelectedTodoForTime(null);
+          setTimeEntries([]);
+        }}
+        todo={selectedTodoForTime}
+        timeEntries={timeEntries}
       />
 
       {filteredTodos.length === 0 ? (
         <EmptyState />
       ) : (
-        <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-4">
-          {filteredTodos.map((todo) => (
-            <TodoItem key={todo.id} todo={todo} />
-          ))}
-        </div>
+        <>
+          <div className={`${viewMode === 'grid' ? 'grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-4' : 'space-y-4'}`}>
+            {paginatedTodos.map((todo) => (
+              <TodoItem key={todo.id} todo={todo} />
+            ))}
+          </div>
+          
+          <Pagination />
+        </>
       )}
     </div>
   );

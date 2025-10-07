@@ -1,8 +1,51 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
-import { Plus, DollarSign, Tag, AlertCircle, Clock, Trash2, X, Building, Globe, ChevronDown, Upload, FileText, Image, Download, Check, X as XIcon, MessageSquare, User, Shield, Calendar, Filter, Plane, RadioTower } from 'lucide-react';
+import { Plus, DollarSign, Tag, AlertCircle, Clock, Trash2, X, Building, Globe, ChevronDown, Upload, FileText, Image, Download, Check, X as XIcon, MessageSquare, User, Shield, Calendar, Filter, Plane, RadioTower, Edit2, Save, ChevronLeft, ChevronRight } from 'lucide-react';
 import ReactCountryFlag from 'react-country-flag';
+
+// Constants-driven architecture
+const QUEUE_CONSTANTS = {
+  categories: ['expense', 'request', 'petty cash', 'travel', 'supplies', 'other'] as const,
+  statuses: ['pending', 'approved', 'rejected', 'completed'] as const,
+  priorities: ['low', 'medium', 'high'] as const,
+  currencies: ['USD', 'KES', 'SSP'] as const,
+  branches: ['All', 'Juba', 'Nairobi'] as const,
+  countries: [
+    { name: 'All', code: 'ALL' },
+    { name: 'Kenya', code: 'KE' },
+    { name: 'South Sudan', code: 'SS' },
+    { name: 'Other', code: 'XX' }
+  ] as const,
+  itemsPerPage: 6,
+  tabs: ['all', 'pending', 'approved', 'rejected', 'my-items', 'requires-attention'] as const
+} as const;
+
+// Date filter options
+const dateFilterOptions = [
+  { value: 'all', label: 'All Time' },
+  { value: 'today', label: 'Today' },
+  { value: 'yesterday', label: 'Yesterday' },
+  { value: 'thisWeek', label: 'This Week' },
+  { value: 'lastWeek', label: 'Last Week' },
+  { value: 'thisMonth', label: 'This Month' },
+  { value: 'lastMonth', label: 'Last Month' },
+  { value: 'custom', label: 'Custom Range' }
+];
+
+const ACCEPTED_FILE_TYPES = {
+  'image/*': ['.jpg', '.jpeg', '.png', '.gif', '.webp'],
+  'application/pdf': ['.pdf'],
+  'application/msword': ['.doc'],
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document': ['.docx']
+};
+
+// Currency conversion rates
+const CURRENCY_RATES = {
+  USD: 1,
+  KES: 150,
+  SSP: 1000
+};
 
 type Queue = {
   id: string;
@@ -19,6 +62,9 @@ type Queue = {
   country: string | null;
   receipt_url: string | null;
   receipt_name: string | null;
+  invoice_url: string | null;
+  invoice_name: string | null;
+  currency: string;
   decisions?: Decision[];
   user_email?: string; 
 };
@@ -33,34 +79,642 @@ type Decision = {
   user_email?: string;
 };
 
-const categories = ['expense', 'request', 'petty cash', 'travel', 'supplies', 'other'];
-const statuses = ['pending', 'approved', 'rejected', 'completed'];
-const priorities = ['low', 'medium', 'high'];
-
-const countries = [
-  { name: 'Kenya', code: 'KE' },
-  { name: 'South Sudan', code: 'SS' },
-  { name: 'Other', code: 'XX' }
-];
-
-const ACCEPTED_FILE_TYPES = {
-  'image/*': ['.jpg', '.jpeg', '.png', '.gif', '.webp'],
-  'application/pdf': ['.pdf'],
-  'application/msword': ['.doc'],
-  'application/vnd.openxmlformats-officedocument.wordprocessingml.document': ['.docx']
+// Utility functions
+const getPriorityColor = (priority: string) => {
+  switch (priority) {
+    case 'high': return 'bg-red-100 text-red-700 border-red-200';
+    case 'medium': return 'bg-amber-100 text-amber-700 border-amber-200';
+    case 'low': return 'bg-green-100 text-green-700 border-green-200';
+    default: return 'bg-slate-100 text-slate-700 border-slate-200';
+  }
 };
 
-// Date filter options
-const dateFilterOptions = [
-  { value: 'all', label: 'All Time' },
-  { value: 'today', label: 'Today' },
-  { value: 'yesterday', label: 'Yesterday' },
-  { value: 'thisWeek', label: 'This Week' },
-  { value: 'lastWeek', label: 'Last Week' },
-  { value: 'thisMonth', label: 'This Month' },
-  { value: 'lastMonth', label: 'Last Month' },
-  { value: 'custom', label: 'Custom Range' }
-];
+const getStatusColor = (status: string) => {
+  switch (status) {
+    case 'pending': return 'bg-blue-100 text-blue-700 border-blue-200';
+    case 'approved': return 'bg-green-100 text-green-700 border-green-200';
+    case 'rejected': return 'bg-red-100 text-red-700 border-red-200';
+    case 'completed': return 'bg-slate-100 text-slate-700 border-slate-200';
+    default: return 'bg-slate-100 text-slate-700 border-slate-200';
+  }
+};
+
+const getRoleIcon = (role: string) => {
+  switch (role) {
+    case 'admin': return <Shield className="w-4 h-4" />;
+    case 'operations': return <User className="w-4 h-4" />;
+    default: return <User className="w-4 h-4" />;
+  }
+};
+
+const getRoleColor = (role: string) => {
+  switch (role) {
+    case 'admin': return 'bg-purple-100 text-purple-700 border-purple-200';
+    case 'operations': return 'bg-blue-100 text-blue-700 border-blue-200';
+    default: return 'bg-slate-100 text-slate-700 border-slate-200';
+  }
+};
+
+const getCountryName = (countryCode: string) => {
+  const country = QUEUE_CONSTANTS.countries.find(c => c.code === countryCode);
+  return country ? country.name : countryCode;
+};
+
+const formatCurrency = (amount: number, currency: string) => {
+  const symbols = {
+    USD: '$',
+    KES: 'KSh ',
+    SSP: 'SSP '
+  };
+  
+  return `${symbols[currency as keyof typeof symbols] || ''}${amount.toFixed(2)}`;
+};
+
+const getFileIcon = (fileName: string) => {
+  if (fileName.match(/\.(jpg|jpeg|png|gif|webp)$/i)) {
+    return <Image className="w-3 h-3" />;
+  } else if (fileName.match(/\.(pdf)$/i)) {
+    return <FileText className="w-3 h-3" />;
+  } else {
+    return <FileText className="w-3 h-3" />;
+  }
+};
+
+const convertCurrency = (amount: number, fromCurrency: string, toCurrency: string) => {
+  if (fromCurrency === toCurrency) return amount;
+  
+  const amountInUSD = amount / CURRENCY_RATES[fromCurrency as keyof typeof CURRENCY_RATES];
+  return amountInUSD * CURRENCY_RATES[toCurrency as keyof typeof CURRENCY_RATES];
+};
+
+// Form Components
+const FormInput = ({ 
+  label, 
+  value, 
+  onChange, 
+  placeholder, 
+  required,
+  type = "text",
+  icon: Icon,
+  autoFocus = false
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  placeholder?: string;
+  required?: boolean;
+  type?: string;
+  icon?: any;
+  autoFocus?: boolean;
+}) => {
+  return (
+    <div>
+      <label className="block text-xs font-semibold text-slate-700 mb-2">{label}</label>
+      <div className="relative">
+        {Icon && <Icon className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />}
+        <input
+          type={type}
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          className={`w-full ${Icon ? 'pl-9' : 'px-4'} pr-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all placeholder:text-slate-400 text-xs`}
+          placeholder={placeholder}
+          required={required}
+          autoFocus={autoFocus}
+        />
+      </div>
+    </div>
+  );
+};
+
+const FormSelect = ({ 
+  label, 
+  value, 
+  onChange, 
+  options, 
+  icon: Icon 
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  options: { value: string; label: string }[];
+  icon?: any;
+}) => (
+  <div>
+    <label className="block text-xs font-semibold text-slate-700 mb-2">{label}</label>
+    <div className="relative">
+      {Icon && <Icon className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 z-10" />}
+      <select
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        className={`w-full ${Icon ? 'pl-9' : 'px-4'} pr-10 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all appearance-none cursor-pointer text-xs relative z-0`}
+      >
+        {options.map((option) => (
+          <option key={option.value} value={option.value}>
+            {option.label}
+          </option>
+        ))}
+      </select>
+      <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 pointer-events-none" />
+    </div>
+  </div>
+);
+
+const FormTextarea = ({ 
+  label, 
+  value, 
+  onChange, 
+  placeholder, 
+  required 
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  placeholder?: string;
+  required?: boolean;
+}) => {
+  return (
+    <div>
+      <label className="block text-xs font-semibold text-slate-700 mb-2">{label}</label>
+      <textarea
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all placeholder:text-slate-400 text-xs resize-none"
+        placeholder={placeholder}
+        required={required}
+        rows={3}
+      />
+    </div>
+  );
+};
+
+// Dashboard Summary Component
+const DashboardSummary = ({ 
+  filteredQueues, 
+  user, 
+  canManageAllQueues 
+}: { 
+  filteredQueues: Queue[];
+  user: any;
+  canManageAllQueues: boolean;
+}) => {
+  const pendingQueues = filteredQueues.filter(queue => queue.status === 'pending');
+  const myPendingQueues = filteredQueues.filter(queue => 
+    queue.user_id === user?.id && queue.status === 'pending'
+  );
+  const highPriorityQueues = filteredQueues.filter(queue => 
+    queue.priority === 'high' && queue.status === 'pending'
+  );
+  const requiresAttentionQueues = filteredQueues.filter(queue => 
+    queue.amount && queue.amount > 500 && queue.status === 'pending'
+  );
+
+  if (canManageAllQueues) return null;
+
+  return (
+    <div className="bg-gradient-to-r from-blue-50 to-indigo-50 border border-blue-200 rounded-xl p-4 mb-6">
+      <h3 className="text-sm font-semibold text-slate-900 mb-3">My Queue Summary</h3>
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+        <div className="text-center">
+          <div className="text-2xl font-bold text-blue-600">{myPendingQueues.length}</div>
+          <div className="text-xs text-slate-600">My Pending</div>
+        </div>
+        <div className="text-center">
+          <div className="text-2xl font-bold text-amber-600">{highPriorityQueues.filter(q => q.user_id === user?.id).length}</div>
+          <div className="text-xs text-slate-600">High Priority</div>
+        </div>
+        <div className="text-center">
+          <div className="text-2xl font-bold text-purple-600">
+            {requiresAttentionQueues.filter(q => q.user_id === user?.id).length}
+          </div>
+          <div className="text-xs text-slate-600">Requires Attention</div>
+        </div>
+        <div className="text-center">
+          <div className="text-2xl font-bold text-green-600">
+            {filteredQueues.filter(q => q.user_id === user?.id && q.status === 'approved').length}
+          </div>
+          <div className="text-xs text-slate-600">Approved</div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// Enhanced Queue Form Modal
+const QueueFormModal = ({ 
+  isOpen, 
+  onClose, 
+  onSubmit, 
+  user,
+  editingQueue,
+  onUpdate
+}: { 
+  isOpen: boolean;
+  onClose: () => void;
+  onSubmit: (formData: any) => void;
+  user: any;
+  editingQueue?: Queue | null;
+  onUpdate?: (id: string, formData: any) => void;
+}) => {
+  const [formData, setFormData] = useState({
+    title: '',
+    description: '',
+    amount: '',
+    category: 'expense',
+    priority: 'medium',
+    branchName: '',
+    country: '',
+    currency: 'USD',
+    receipt: null as File | null,
+    invoice: null as File | null
+  });
+
+  // Reset form when modal opens/closes or editingQueue changes
+  useEffect(() => {
+    if (isOpen) {
+      if (editingQueue) {
+        setFormData({
+          title: editingQueue.title,
+          description: editingQueue.description || '',
+          amount: editingQueue.amount?.toString() || '',
+          category: editingQueue.category,
+          priority: editingQueue.priority,
+          branchName: editingQueue.branch_name || '',
+          country: editingQueue.country || '',
+          currency: editingQueue.currency,
+          receipt: null,
+          invoice: null
+        });
+      } else {
+        setFormData({
+          title: '',
+          description: '',
+          amount: '',
+          category: 'expense',
+          priority: 'medium',
+          branchName: '',
+          country: '',
+          currency: 'USD',
+          receipt: null,
+          invoice: null
+        });
+      }
+    }
+  }, [isOpen, editingQueue]);
+
+  const handleInputChange = (field: string, value: string | File | null) => {
+    setFormData(prev => ({
+      ...prev,
+      [field]: value
+    }));
+  };
+
+  const handleCurrencyChange = (newCurrency: string) => {
+    if (formData.amount && formData.currency) {
+      const currentAmount = parseFloat(formData.amount);
+      if (!isNaN(currentAmount)) {
+        const convertedAmount = convertCurrency(currentAmount, formData.currency, newCurrency);
+        setFormData({
+          ...formData,
+          currency: newCurrency,
+          amount: convertedAmount.toFixed(2)
+        });
+      } else {
+        setFormData({
+          ...formData,
+          currency: newCurrency
+        });
+      }
+    } else {
+      setFormData({
+        ...formData,
+        currency: newCurrency
+      });
+    }
+  };
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (editingQueue && onUpdate) {
+      onUpdate(editingQueue.id, formData);
+    } else {
+      onSubmit(formData);
+    }
+    onClose();
+  };
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>, field: 'receipt' | 'invoice') => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const fileExtension = '.' + file.name.split('.').pop()?.toLowerCase();
+    const isValidType = Object.values(ACCEPTED_FILE_TYPES)
+      .flat()
+      .includes(fileExtension);
+
+    if (!isValidType) {
+      alert('Please select a valid file type (images, PDF, or Word documents)');
+      return;
+    }
+
+    if (file.size > 5 * 1024 * 1024) {
+      alert('File size must be less than 5MB');
+      return;
+    }
+
+    setFormData({ ...formData, [field]: file });
+  };
+
+  const isFormValid = () => {
+    return formData.title.trim() !== '' &&
+           formData.amount.trim() !== '' &&
+           formData.category.trim() !== '' &&
+           formData.priority.trim() !== '' &&
+           formData.branchName.trim() !== '' &&
+           formData.country.trim() !== '' &&
+           formData.currency.trim() !== '';
+  };
+
+  const categoryOptions = QUEUE_CONSTANTS.categories.map(category => ({
+    value: category,
+    label: category.charAt(0).toUpperCase() + category.slice(1)
+  }));
+
+  const priorityOptions = QUEUE_CONSTANTS.priorities.map(priority => ({
+    value: priority,
+    label: priority.charAt(0).toUpperCase() + priority.slice(1)
+  }));
+
+  const currencyOptions = QUEUE_CONSTANTS.currencies.map(currency => ({
+    value: currency,
+    label: currency
+  }));
+
+  const branchOptions = QUEUE_CONSTANTS.branches.map(branch => ({
+    value: branch,
+    label: branch
+  }));
+
+  const countryOptions = QUEUE_CONSTANTS.countries.map(country => ({
+    value: country.code,
+    label: country.name
+  }));
+
+  const renderCountryFlag = (countryCode: string, size: string = '1em') => {
+    if (!countryCode || countryCode === 'ALL' || countryCode === 'XX') {
+      return <Globe className="w-4 h-4" />;
+    }
+    
+    try {
+      return (
+        <ReactCountryFlag
+          countryCode={countryCode}
+          svg
+          style={{
+            width: size,
+            height: size,
+          }}
+          title={getCountryName(countryCode)}
+        />
+      );
+    } catch (error) {
+      return <Globe className="w-4 h-4" />;
+    }
+  };
+
+  if (!isOpen) return null;
+
+  return (
+    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+      <div className="bg-white rounded-2xl shadow-xl w-full max-w-4xl max-h-[90vh] overflow-y-auto">
+        <div className="flex justify-between items-center p-6 border-b border-slate-200 sticky top-0 bg-white z-10">
+          <h3 className="text-xl font-semibold text-slate-900">
+            {editingQueue ? 'Edit Queue Item' : 'Create New Queue Item'}
+          </h3>
+          <button 
+            onClick={onClose}
+            className="text-slate-400 hover:text-slate-600 transition-colors p-1 rounded-lg"
+          >
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+        
+        <form onSubmit={handleSubmit} className="p-6">
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            {/* Left Column - Basic Info */}
+            <div className="space-y-4">
+              <FormInput
+                label="Title"
+                value={formData.title}
+                onChange={(value) => handleInputChange('title', value)}
+                placeholder="Enter item title"
+                required
+                autoFocus
+              />
+
+              <FormTextarea
+                label="Description"
+                value={formData.description}
+                onChange={(value) => handleInputChange('description', value)}
+                placeholder="Add a description (optional)"
+              />
+
+              {/* Receipt Upload */}
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-2">
+                  Receipt (Optional)
+                </label>
+                <div className={`border-2 border-dashed rounded-xl p-4 transition-all ${
+                  formData.receipt 
+                    ? 'border-green-300 bg-green-50/50' 
+                    : 'border-slate-200 hover:border-blue-300 hover:bg-blue-50/50'
+                }`}>
+                  <input
+                    type="file"
+                    id="receipt-upload"
+                    onChange={(e) => handleFileChange(e, 'receipt')}
+                    className="hidden"
+                    accept={Object.keys(ACCEPTED_FILE_TYPES).join(',')}
+                  />
+                  <label htmlFor="receipt-upload" className="cursor-pointer block">
+                    <div className="text-center">
+                      {formData.receipt ? (
+                        <FileText className="w-8 h-8 text-green-500 mx-auto mb-2" />
+                      ) : (
+                        <Upload className="w-8 h-8 text-slate-400 mx-auto mb-2" />
+                      )}
+                      <p className="text-xs text-slate-600 font-medium mb-1">
+                        {formData.receipt ? formData.receipt.name : 'Click to upload receipt'}
+                      </p>
+                      <p className="text-xs text-slate-400">
+                        Supports: JPG, PNG, PDF, DOC (Max 5MB)
+                      </p>
+                      {formData.receipt && (
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleInputChange('receipt', null);
+                          }}
+                          className="mt-2 text-red-500 hover:text-red-700 text-xs font-medium"
+                        >
+                          Remove file
+                        </button>
+                      )}
+                    </div>
+                  </label>
+                </div>
+              </div>
+            </div>
+
+            {/* Right Column - Details */}
+            <div className="space-y-4">
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-2">
+                    Amount
+                  </label>
+                  <div className="relative">
+                    <DollarSign className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+                    <input
+                      type="number"
+                      step="0.01"
+                      min="0"
+                      value={formData.amount}
+                      onChange={(e) => handleInputChange('amount', e.target.value)}
+                      className="w-full pl-9 pr-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all placeholder:text-slate-400 text-xs"
+                      placeholder="0.00"
+                      required
+                    />
+                  </div>
+                </div>
+
+                <FormSelect
+                  label="Currency"
+                  value={formData.currency}
+                  onChange={handleCurrencyChange}
+                  options={currencyOptions}
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <FormSelect
+                  label="Priority"
+                  value={formData.priority}
+                  onChange={(value) => handleInputChange('priority', value)}
+                  options={priorityOptions}
+                />
+
+                <FormSelect
+                  label="Category"
+                  value={formData.category}
+                  onChange={(value) => handleInputChange('category', value)}
+                  options={categoryOptions}
+                />
+              </div>
+
+              {/* Branch and Country Fields */}
+              <div className="grid grid-cols-2 gap-4">
+                <FormSelect
+                  label="Branch"
+                  value={formData.branchName}
+                  onChange={(value) => handleInputChange('branchName', value)}
+                  options={branchOptions}
+                  icon={Building}
+                />
+
+                <FormSelect
+                  label="Country"
+                  value={formData.country}
+                  onChange={(value) => handleInputChange('country', value)}
+                  options={countryOptions}
+                  icon={Globe}
+                />
+              </div>
+
+              {/* Country Preview */}
+              {formData.country && formData.country !== 'XX' && formData.country !== 'ALL' && (
+                <div className="pt-2">
+                  <label className="block text-xs font-semibold text-slate-700 mb-2">Selected Country</label>
+                  <div className="flex items-center gap-3 px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl">
+                    {renderCountryFlag(formData.country, '1.5em')}
+                    <span className="text-sm font-medium text-slate-700">
+                      {getCountryName(formData.country)}
+                    </span>
+                  </div>
+                </div>
+              )}
+
+              {/* Invoice Upload */}
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-2">
+                  Invoice (Optional)
+                </label>
+                <div className={`border-2 border-dashed rounded-xl p-4 transition-all ${
+                  formData.invoice 
+                    ? 'border-green-300 bg-green-50/50' 
+                    : 'border-slate-200 hover:border-blue-300 hover:bg-blue-50/50'
+                }`}>
+                  <input
+                    type="file"
+                    id="invoice-upload"
+                    onChange={(e) => handleFileChange(e, 'invoice')}
+                    className="hidden"
+                    accept={Object.keys(ACCEPTED_FILE_TYPES).join(',')}
+                  />
+                  <label htmlFor="invoice-upload" className="cursor-pointer block">
+                    <div className="text-center">
+                      {formData.invoice ? (
+                        <FileText className="w-8 h-8 text-green-500 mx-auto mb-2" />
+                      ) : (
+                        <Upload className="w-8 h-8 text-slate-400 mx-auto mb-2" />
+                      )}
+                      <p className="text-xs text-slate-600 font-medium mb-1">
+                        {formData.invoice ? formData.invoice.name : 'Click to upload invoice'}
+                      </p>
+                      <p className="text-xs text-slate-400">
+                        Supports: JPG, PNG, PDF, DOC (Max 5MB)
+                      </p>
+                      {formData.invoice && (
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleInputChange('invoice', null);
+                          }}
+                          className="mt-2 text-red-500 hover:text-red-700 text-xs font-medium"
+                        >
+                          Remove file
+                        </button>
+                      )}
+                    </div>
+                  </label>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Form Actions */}
+          <div className="flex gap-3 pt-6 mt-6 border-t border-slate-200">
+            <button
+              type="submit"
+              disabled={!isFormValid()}
+              className="flex-1 bg-gradient-to-r from-blue-500 to-blue-600 hover:from-blue-600 hover:to-blue-700 disabled:from-slate-400 disabled:to-slate-500 text-white py-3.5 rounded-xl font-semibold shadow-lg hover:shadow-xl transition-all text-xs disabled:cursor-not-allowed"
+            >
+              {editingQueue ? 'Update Item' : 'Create Item'}
+            </button>
+            <button
+              type="button"
+              onClick={onClose}
+              className="flex-1 bg-slate-100 hover:bg-slate-200 text-slate-700 py-3.5 rounded-xl font-semibold transition-all text-xs"
+            >
+              Cancel
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+};
 
 export function QueueList() {
   const { user } = useAuth();
@@ -74,18 +728,24 @@ export function QueueList() {
   const [decisionComment, setDecisionComment] = useState('');
   const [userRole, setUserRole] = useState<string>('user');
   const [roleLoading, setRoleLoading] = useState(true);
+  const [editingQueue, setEditingQueue] = useState<Queue | null>(null);
   
-  // Date filter states
+  // Enhanced state management
+  const [activeTab, setActiveTab] = useState<(typeof QUEUE_CONSTANTS.tabs)[number]>('all');
+  const [currentPage, setCurrentPage] = useState(1);
+  
+  // Filter states
   const [dateFilter, setDateFilter] = useState('all');
   const [customStartDate, setCustomStartDate] = useState('');
   const [customEndDate, setCustomEndDate] = useState('');
   const [showDateFilter, setShowDateFilter] = useState(false);
-
-  // Branch and Country filter states
   const [branchFilter, setBranchFilter] = useState('');
   const [countryFilter, setCountryFilter] = useState('');
   const [availableBranches, setAvailableBranches] = useState<string[]>([]);
   const [showBranchCountryFilter, setShowBranchCountryFilter] = useState(false);
+  const [categoryFilter, setCategoryFilter] = useState('');
+  const [priorityFilter, setPriorityFilter] = useState('');
+  const [amountFilter, setAmountFilter] = useState('');
 
   const [formData, setFormData] = useState({
     title: '',
@@ -95,17 +755,92 @@ export function QueueList() {
     priority: 'medium',
     branchName: '',
     country: '',
-    receipt: null as File | null
+    currency: 'USD',
+    receipt: null as File | null,
+    invoice: null as File | null
   });
 
-  // Fixed: Fetch user role first, then fetch queues
-  useEffect(() => {
-    if (user) {
-      fetchUserRoleAndQueues();
-    }
-  }, [user]);
+  // Calculate pagination using constants
+  const totalPages = Math.ceil(filteredQueues.length / QUEUE_CONSTANTS.itemsPerPage);
+  const startIndex = (currentPage - 1) * QUEUE_CONSTANTS.itemsPerPage;
+  const currentItems = filteredQueues.slice(startIndex, startIndex + QUEUE_CONSTANTS.itemsPerPage);
 
-  // Extract available branches from queues
+  // Apply tab filters
+  const applyTabFilter = useCallback((queuesToFilter: Queue[]) => {
+    switch (activeTab) {
+      case 'pending':
+        return queuesToFilter.filter(queue => queue.status === 'pending');
+      case 'approved':
+        return queuesToFilter.filter(queue => queue.status === 'approved');
+      case 'rejected':
+        return queuesToFilter.filter(queue => queue.status === 'rejected');
+      case 'my-items':
+        return queuesToFilter.filter(queue => queue.user_id === user?.id);
+      case 'requires-attention':
+        return queuesToFilter.filter(queue => 
+          (queue.amount && queue.amount > 500 && queue.status === 'pending') || 
+          queue.priority === 'high'
+        );
+      default:
+        return queuesToFilter;
+    }
+  }, [activeTab, user]);
+
+  // Apply all filters
+  const applyAllFilters = useCallback(() => {
+    if (!queues.length) {
+      setFilteredQueues([]);
+      return;
+    }
+
+    let filtered = [...queues];
+
+    // Apply tab filter first
+    filtered = applyTabFilter(filtered);
+
+    // Apply date filter
+    filtered = applyDateFilterToQueues(filtered);
+
+    // Apply branch filter
+    if (branchFilter && branchFilter !== 'All') {
+      filtered = filtered.filter(queue => 
+        queue.branch_name?.toLowerCase().includes(branchFilter.toLowerCase())
+      );
+    }
+
+    // Apply country filter
+    if (countryFilter && countryFilter !== 'ALL') {
+      filtered = filtered.filter(queue => queue.country === countryFilter);
+    }
+
+    // Apply category filter
+    if (categoryFilter) {
+      filtered = filtered.filter(queue => queue.category === categoryFilter);
+    }
+
+    // Apply priority filter
+    if (priorityFilter) {
+      filtered = filtered.filter(queue => queue.priority === priorityFilter);
+    }
+
+    // Apply amount filter
+    if (amountFilter) {
+      const amount = parseFloat(amountFilter);
+      if (!isNaN(amount)) {
+        filtered = filtered.filter(queue => queue.amount && queue.amount >= amount);
+      }
+    }
+
+    setFilteredQueues(filtered);
+    setCurrentPage(1);
+  }, [queues, dateFilter, customStartDate, customEndDate, branchFilter, countryFilter, categoryFilter, priorityFilter, amountFilter, applyTabFilter]);
+
+  // Apply filters when dependencies change
+  useEffect(() => {
+    applyAllFilters();
+  }, [applyAllFilters]);
+
+  // Extract available branches
   useEffect(() => {
     if (queues.length > 0) {
       const branches = [...new Set(queues
@@ -116,38 +851,8 @@ export function QueueList() {
     }
   }, [queues]);
 
-  // Apply all filters when queues or filter settings change
-  useEffect(() => {
-    applyAllFilters();
-  }, [queues, dateFilter, customStartDate, customEndDate, branchFilter, countryFilter]);
-
-  const applyAllFilters = () => {
-    if (!queues.length) {
-      setFilteredQueues([]);
-      return;
-    }
-
-    let filtered = [...queues];
-
-    // Apply date filter
-    filtered = applyDateFilterToQueues(filtered);
-
-    // Apply branch filter
-    if (branchFilter) {
-      filtered = filtered.filter(queue => 
-        queue.branch_name?.toLowerCase().includes(branchFilter.toLowerCase())
-      );
-    }
-
-    // Apply country filter
-    if (countryFilter) {
-      filtered = filtered.filter(queue => queue.country === countryFilter);
-    }
-
-    setFilteredQueues(filtered);
-  };
-
-  const applyDateFilterToQueues = (queuesToFilter: Queue[]) => {
+  // Date filter function
+  const applyDateFilterToQueues = useCallback((queuesToFilter: Queue[]) => {
     if (dateFilter === 'all') {
       return queuesToFilter;
     }
@@ -229,7 +934,14 @@ export function QueueList() {
     }
 
     return filtered;
-  };
+  }, [dateFilter, customStartDate, customEndDate]);
+
+  // Data fetching
+  useEffect(() => {
+    if (user) {
+      fetchUserRoleAndQueues();
+    }
+  }, [user]);
 
   const fetchUserRoleAndQueues = async () => {
     try {
@@ -349,6 +1061,11 @@ export function QueueList() {
     }
   };
 
+  // Permission checks
+  const canManageAllQueues = useCallback((role = userRole) => {
+    return ['admin', 'operations'].includes(role);
+  }, [userRole]);
+
   const canApproveReject = (role = userRole) => {
     return ['admin', 'operations'].includes(role);
   };
@@ -367,6 +1084,7 @@ export function QueueList() {
     return false;
   };
 
+  // Queue actions
   const handleDecision = async (status: 'approved' | 'rejected') => {
     if (!selectedQueue || !user) return;
 
@@ -420,12 +1138,12 @@ export function QueueList() {
     setShowDecisionModal(true);
   };
 
-  const handleFileUpload = async (file: File, queueId: string) => {
+  const handleFileUpload = async (file: File, queueId: string, field: 'receipt' | 'invoice') => {
     try {
       setUploading(true);
       
       const fileExt = file.name.split('.').pop();
-      const fileName = `${queueId}/${Math.random().toString(36).substring(2)}.${fileExt}`;
+      const fileName = `${queueId}/${field}_${Math.random().toString(36).substring(2)}.${fileExt}`;
       
       const { error: uploadError } = await supabase.storage
         .from('receipts')
@@ -437,28 +1155,29 @@ export function QueueList() {
         .from('receipts')
         .getPublicUrl(fileName);
 
+      const updateData = {
+        [`${field}_url`]: publicUrl,
+        [`${field}_name`]: file.name,
+        updated_at: new Date().toISOString()
+      };
+
       const { error: updateError } = await supabase
         .from('queues')
-        .update({
-          receipt_url: publicUrl,
-          receipt_name: file.name,
-          updated_at: new Date().toISOString()
-        })
+        .update(updateData)
         .eq('id', queueId);
 
       if (updateError) throw updateError;
 
       fetchQueues();
     } catch (error) {
-      console.error('Error uploading receipt:', error);
-      alert('Error uploading receipt. Please try again.');
+      console.error('Error uploading file:', error);
+      alert('Error uploading file. Please try again.');
     } finally {
       setUploading(false);
     }
   };
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const handleSubmit = async (formData: any) => {
     if (!user) return;
 
     try {
@@ -476,8 +1195,11 @@ export function QueueList() {
           status: 'pending',
           branch_name: formData.branchName.trim() || null,
           country: formData.country || null,
+          currency: formData.currency,
           receipt_url: null,
           receipt_name: null,
+          invoice_url: null,
+          invoice_name: null,
           created_at: new Date().toISOString(),
           updated_at: new Date().toISOString()
         }])
@@ -489,9 +1211,16 @@ export function QueueList() {
         throw error;
       }
 
+      // Upload files if they exist
+      const uploadPromises = [];
       if (formData.receipt && queueData) {
-        await handleFileUpload(formData.receipt, queueData.id);
+        uploadPromises.push(handleFileUpload(formData.receipt, queueData.id, 'receipt'));
       }
+      if (formData.invoice && queueData) {
+        uploadPromises.push(handleFileUpload(formData.invoice, queueData.id, 'invoice'));
+      }
+
+      await Promise.all(uploadPromises);
 
       setFormData({ 
         title: '', 
@@ -501,7 +1230,9 @@ export function QueueList() {
         priority: 'medium',
         branchName: '',
         country: '',
-        receipt: null
+        currency: 'USD',
+        receipt: null,
+        invoice: null
       });
       setShowForm(false);
       fetchQueues();
@@ -513,22 +1244,58 @@ export function QueueList() {
     }
   };
 
+  const handleUpdate = async (id: string, formData: any) => {
+    try {
+      const { error } = await supabase
+        .from('queues')
+        .update({
+          title: formData.title.trim(),
+          description: formData.description.trim() || null,
+          amount: formData.amount ? parseFloat(formData.amount) : null,
+          category: formData.category,
+          priority: formData.priority,
+          branch_name: formData.branchName.trim() || null,
+          country: formData.country || null,
+          currency: formData.currency,
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', id);
+
+      if (error) throw error;
+
+      setEditingQueue(null);
+      fetchQueues();
+    } catch (error) {
+      console.error('Error updating queue:', error);
+      alert('Error updating queue item. Please try again.');
+    }
+  };
+
   const handleDelete = async (id: string) => {
     if (!confirm('Are you sure you want to delete this item?')) return;
     
     try {
       const { data: queue } = await supabase
         .from('queues')
-        .select('receipt_url')
+        .select('receipt_url, invoice_url')
         .eq('id', id)
         .single();
 
-      if (queue?.receipt_url) {
-        const fileName = queue.receipt_url.split('/').pop();
-        if (fileName) {
+      if (queue) {
+        const filesToRemove = [];
+        if (queue.receipt_url) {
+          const fileName = queue.receipt_url.split('/').pop();
+          if (fileName) filesToRemove.push(`${id}/${fileName}`);
+        }
+        if (queue.invoice_url) {
+          const fileName = queue.invoice_url.split('/').pop();
+          if (fileName) filesToRemove.push(`${id}/${fileName}`);
+        }
+
+        if (filesToRemove.length > 0) {
           await supabase.storage
             .from('receipts')
-            .remove([`${id}/${fileName}`]);
+            .remove(filesToRemove);
         }
       }
 
@@ -540,20 +1307,20 @@ export function QueueList() {
     }
   };
 
-  const handleReceiptUpload = async (file: File, queueId: string) => {
-    await handleFileUpload(file, queueId);
+  const handleFileUploadForQueue = async (file: File, queueId: string, field: 'receipt' | 'invoice') => {
+    await handleFileUpload(file, queueId, field);
   };
 
-  const handleReceiptDelete = async (queueId: string) => {
+  const handleFileDelete = async (queueId: string, field: 'receipt' | 'invoice') => {
     try {
       const { data: queue } = await supabase
         .from('queues')
-        .select('receipt_url')
+        .select('*')
         .eq('id', queueId)
         .single();
 
-      if (queue?.receipt_url) {
-        const fileName = queue.receipt_url.split('/').pop();
+      if (queue?.[`${field}_url`]) {
+        const fileName = queue[`${field}_url`].split('/').pop();
         if (fileName) {
           await supabase.storage
             .from('receipts')
@@ -561,27 +1328,28 @@ export function QueueList() {
         }
       }
 
+      const updateData = {
+        [`${field}_url`]: null,
+        [`${field}_name`]: null,
+        updated_at: new Date().toISOString()
+      };
+
       const { error } = await supabase
         .from('queues')
-        .update({
-          receipt_url: null,
-          receipt_name: null,
-          updated_at: new Date().toISOString()
-        })
+        .update(updateData)
         .eq('id', queueId);
 
       if (error) throw error;
       fetchQueues();
     } catch (error) {
-      console.error('Error deleting receipt:', error);
+      console.error('Error deleting file:', error);
     }
   };
 
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleEditFileChange = (e: React.ChangeEvent<HTMLInputElement>, queueId: string, field: 'receipt' | 'invoice') => {
     const file = e.target.files?.[0];
     if (!file) return;
 
-    // Validate file type
     const fileExtension = '.' + file.name.split('.').pop()?.toLowerCase();
     const isValidType = Object.values(ACCEPTED_FILE_TYPES)
       .flat()
@@ -592,323 +1360,461 @@ export function QueueList() {
       return;
     }
 
-    // Validate file size (5MB limit)
     if (file.size > 5 * 1024 * 1024) {
       alert('File size must be less than 5MB');
       return;
     }
 
-    setFormData({ ...formData, receipt: file });
+    handleFileUploadForQueue(file, queueId, field);
   };
 
-  const isFormValid = () => {
-    return formData.title.trim() !== '';
+  const startEditing = (queue: Queue) => {
+    setEditingQueue(queue);
+    setShowForm(true);
   };
 
-  const getPriorityColor = (priority: string) => {
-    switch (priority) {
-      case 'high': return 'bg-red-100 text-red-700 border-red-200';
-      case 'medium': return 'bg-amber-100 text-amber-700 border-amber-200';
-      case 'low': return 'bg-green-100 text-green-700 border-green-200';
-      default: return 'bg-slate-100 text-slate-700 border-slate-200';
-    }
+  const closeForm = () => {
+    setShowForm(false);
+    setEditingQueue(null);
   };
 
-  const getStatusColor = (status: string) => {
-    switch (status) {
-      case 'pending': return 'bg-blue-100 text-blue-700 border-blue-200';
-      case 'approved': return 'bg-green-100 text-green-700 border-green-200';
-      case 'rejected': return 'bg-red-100 text-red-700 border-red-200';
-      case 'completed': return 'bg-slate-100 text-slate-700 border-slate-200';
-      default: return 'bg-slate-100 text-slate-700 border-slate-200';
-    }
-  };
-
-  const getFileIcon = (fileName: string) => {
-    if (fileName.match(/\.(jpg|jpeg|png|gif|webp)$/i)) {
-      return <Image className="w-3 h-3" />;
-    } else if (fileName.match(/\.(pdf)$/i)) {
-      return <FileText className="w-3 h-3" />;
-    } else {
-      return <FileText className="w-3 h-3" />;
-    }
-  };
-
-  const getCountryName = (countryCode: string) => {
-    const country = countries.find(c => c.code === countryCode);
-    return country ? country.name : countryCode;
-  };
-
-  const getRoleIcon = () => {
-    switch (userRole) {
-      case 'admin': return <Shield className="w-4 h-4" />;
-      case 'operations': return <User className="w-4 h-4" />;
-      default: return <User className="w-4 h-4" />;
-    }
-  };
-
-  const getRoleColor = () => {
-    switch (userRole) {
-      case 'admin': return 'bg-purple-100 text-purple-700 border-purple-200';
-      case 'operations': return 'bg-blue-100 text-blue-700 border-blue-200';
-      default: return 'bg-slate-100 text-slate-700 border-slate-200';
-    }
-  };
-
-  const resetDateFilter = () => {
+  // Filter reset functions
+  const resetDateFilter = useCallback(() => {
     setDateFilter('all');
     setCustomStartDate('');
     setCustomEndDate('');
-  };
+  }, []);
 
-  const resetBranchCountryFilter = () => {
+  const resetBranchCountryFilter = useCallback(() => {
     setBranchFilter('');
     setCountryFilter('');
-  };
+  }, []);
 
-  const resetAllFilters = () => {
+  const resetCategoryPriorityFilter = useCallback(() => {
+    setCategoryFilter('');
+    setPriorityFilter('');
+    setAmountFilter('');
+  }, []);
+
+  const resetAllFilters = useCallback(() => {
     resetDateFilter();
     resetBranchCountryFilter();
+    resetCategoryPriorityFilter();
+    setActiveTab('all');
+  }, [resetDateFilter, resetBranchCountryFilter, resetCategoryPriorityFilter]);
+
+  const hasActiveFilters = useCallback(() => {
+    return dateFilter !== 'all' || branchFilter || countryFilter || categoryFilter || priorityFilter || amountFilter;
+  }, [dateFilter, branchFilter, countryFilter, categoryFilter, priorityFilter, amountFilter]);
+
+  // Pagination controls
+  const goToPage = (page: number) => {
+    setCurrentPage(page);
   };
 
-  const hasActiveFilters = () => {
-    return dateFilter !== 'all' || branchFilter || countryFilter;
+  const nextPage = () => {
+    if (currentPage < totalPages) {
+      setCurrentPage(currentPage + 1);
+    }
   };
 
-  if (loading) {
+  const prevPage = () => {
+    if (currentPage > 1) {
+      setCurrentPage(currentPage - 1);
+    }
+  };
+
+  // UI Components
+  const LoadingSpinner = () => (
+    <div className="flex items-center justify-center h-64">
+      <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600"></div>
+    </div>
+  );
+
+  const EmptyState = () => (
+    <div className="bg-white/60 backdrop-blur-xl rounded-3xl shadow-lg p-16 text-center border border-slate-200/60">
+      <div className="w-20 h-20 bg-gradient-to-br from-slate-100 to-slate-200 rounded-2xl flex items-center justify-center mx-auto mb-6">
+        <RadioTower className="w-10 h-10 text-slate-300" />
+      </div>
+      <h3 className="text-xl font-base text-slate-900 mb-2">
+        {queues.length === 0 ? 'No Items Yet' : 'No Items Match Your Filter'}
+      </h3>
+      <p className="text-xs text-slate-500">
+        {queues.length === 0 
+          ? 'Create your first queue item to get started' 
+          : 'Try adjusting your filters to see more results'
+        }
+      </p>
+      {queues.length > 0 && (hasActiveFilters() || activeTab !== 'all') && (
+        <button
+          onClick={resetAllFilters}
+          className="mt-4 text-blue-500 hover:text-blue-700 text-xs font-medium"
+        >
+          Clear all filters
+        </button>
+      )}
+    </div>
+  );
+
+  // Tabs Component
+  const Tabs = () => (
+    <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-xl mb-6">
+      {[
+        { id: 'all', label: 'All Items', count: queues.length },
+        { id: 'pending', label: 'Pending', count: queues.filter(q => q.status === 'pending').length },
+        { id: 'approved', label: 'Approved', count: queues.filter(q => q.status === 'approved').length },
+        { id: 'rejected', label: 'Rejected', count: queues.filter(q => q.status === 'rejected').length },
+        { id: 'my-items', label: 'My Items', count: queues.filter(q => q.user_id === user?.id).length },
+        { id: 'requires-attention', label: 'Requires Attention', count: queues.filter(q => 
+          (q.amount && q.amount > 500 && q.status === 'pending') || q.priority === 'high'
+        ).length },
+      ].map((tab) => (
+        <button
+          key={tab.id}
+          onClick={() => setActiveTab(tab.id as any)}
+          className={`flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-semibold transition-all ${
+            activeTab === tab.id
+              ? 'bg-white text-slate-900 shadow-sm'
+              : 'text-slate-600 hover:text-slate-900'
+          }`}
+        >
+          {tab.label}
+          <span className={`px-1.5 py-0.5 rounded-full text-xs ${
+            activeTab === tab.id
+              ? 'bg-blue-100 text-blue-700'
+              : 'bg-slate-200 text-slate-600'
+          }`}>
+            {tab.count}
+          </span>
+        </button>
+      ))}
+    </div>
+  );
+
+  // Pagination Component
+  const Pagination = () => {
+    if (totalPages <= 1) return null;
+
     return (
-      <div className="flex items-center justify-center h-64">
-        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600"></div>
+      <div className="flex items-center justify-between pt-6 border-t border-slate-200">
+        <div className="text-xs text-slate-500">
+          Showing {startIndex + 1}-{Math.min(startIndex + QUEUE_CONSTANTS.itemsPerPage, filteredQueues.length)} of {filteredQueues.length} items
+        </div>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={prevPage}
+            disabled={currentPage === 1}
+            className="flex items-center gap-1 px-3 py-2 rounded-lg text-xs font-semibold disabled:opacity-50 disabled:cursor-not-allowed bg-slate-100 hover:bg-slate-200 text-slate-700 transition-all"
+          >
+            <ChevronLeft className="w-4 h-4" />
+            Previous
+          </button>
+          
+          <div className="flex items-center gap-1">
+            {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
+              let pageNum;
+              if (totalPages <= 5) {
+                pageNum = i + 1;
+              } else if (currentPage <= 3) {
+                pageNum = i + 1;
+              } else if (currentPage >= totalPages - 2) {
+                pageNum = totalPages - 4 + i;
+              } else {
+                pageNum = currentPage - 2 + i;
+              }
+
+              return (
+                <button
+                  key={pageNum}
+                  onClick={() => goToPage(pageNum)}
+                  className={`w-8 h-8 rounded-lg text-xs font-semibold transition-all ${
+                    currentPage === pageNum
+                      ? 'bg-blue-500 text-white'
+                      : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+                  }`}
+                >
+                  {pageNum}
+                </button>
+              );
+            })}
+          </div>
+
+          <button
+            onClick={nextPage}
+            disabled={currentPage === totalPages}
+            className="flex items-center gap-1 px-3 py-2 rounded-lg text-xs font-semibold disabled:opacity-50 disabled:cursor-not-allowed bg-slate-100 hover:bg-slate-200 text-slate-700 transition-all"
+          >
+            Next
+            <ChevronRight className="w-4 h-4" />
+          </button>
+        </div>
       </div>
     );
-  }
+  };
+
+  // Category Priority Filter Dropdown
+  const CategoryPriorityFilterDropdown = () => (
+    <div className="relative">
+      <button
+        onClick={() => setShowBranchCountryFilter(!showBranchCountryFilter)}
+        className="flex items-center gap-2 bg-white hover:bg-slate-50 text-slate-700 px-4 py-2.5 rounded-xl font-semibold shadow-md hover:shadow-lg transition-all border border-slate-200 text-xs"
+      >
+        <Filter className="w-4 h-4" />
+        Category & Priority
+        {(categoryFilter || priorityFilter || amountFilter) && (
+          <span className="bg-blue-500 text-white rounded-full w-2 h-2"></span>
+        )}
+      </button>
+
+      {showBranchCountryFilter && (
+        <div className="absolute top-full right-0 mt-2 bg-white rounded-2xl shadow-xl border border-slate-200 p-4 w-80 z-50">
+          <div className="flex justify-between items-center mb-4">
+            <h3 className="text-sm font-semibold text-slate-900">Filter by Category & Priority</h3>
+            <button 
+              onClick={() => setShowBranchCountryFilter(false)}
+              className="text-slate-400 hover:text-slate-600 transition-colors p-1 rounded-lg"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+
+          {/* Category Filter */}
+          <div className="mb-4">
+            <label className="block text-xs font-semibold text-slate-700 mb-2">Category</label>
+            <select
+              value={categoryFilter}
+              onChange={(e) => setCategoryFilter(e.target.value)}
+              className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all text-xs"
+            >
+              <option value="">All Categories</option>
+              {QUEUE_CONSTANTS.categories.map(category => (
+                <option key={category} value={category}>
+                  {category.charAt(0).toUpperCase() + category.slice(1)}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {/* Priority Filter */}
+          <div className="mb-4">
+            <label className="block text-xs font-semibold text-slate-700 mb-2">Priority</label>
+            <select
+              value={priorityFilter}
+              onChange={(e) => setPriorityFilter(e.target.value)}
+              className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all text-xs"
+            >
+              <option value="">All Priorities</option>
+              {QUEUE_CONSTANTS.priorities.map(priority => (
+                <option key={priority} value={priority}>
+                  {priority.charAt(0).toUpperCase() + priority.slice(1)}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {/* Amount Filter */}
+          <div className="mb-4">
+            <label className="block text-xs font-semibold text-slate-700 mb-2">Minimum Amount</label>
+            <input
+              type="number"
+              step="0.01"
+              min="0"
+              value={amountFilter}
+              onChange={(e) => setAmountFilter(e.target.value)}
+              className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all text-xs"
+              placeholder="0.00"
+            />
+          </div>
+
+          {/* Active Filter Info */}
+          {(categoryFilter || priorityFilter || amountFilter) && (
+            <div className="pt-3 border-t border-slate-200">
+              <div className="flex flex-wrap gap-2 mb-3">
+                {categoryFilter && (
+                  <span className="inline-flex items-center gap-1 px-2 py-1 bg-blue-50 text-blue-700 rounded text-xs">
+                    Category: {categoryFilter.charAt(0).toUpperCase() + categoryFilter.slice(1)}
+                    <button onClick={() => setCategoryFilter('')} className="text-blue-500 hover:text-blue-700">
+                      <X className="w-3 h-3" />
+                    </button>
+                  </span>
+                )}
+                {priorityFilter && (
+                  <span className="inline-flex items-center gap-1 px-2 py-1 bg-purple-50 text-purple-700 rounded text-xs">
+                    Priority: {priorityFilter.charAt(0).toUpperCase() + priorityFilter.slice(1)}
+                    <button onClick={() => setPriorityFilter('')} className="text-purple-500 hover:text-purple-700">
+                      <X className="w-3 h-3" />
+                    </button>
+                  </span>
+                )}
+                {amountFilter && (
+                  <span className="inline-flex items-center gap-1 px-2 py-1 bg-green-50 text-green-700 rounded text-xs">
+                    Min: {formatCurrency(parseFloat(amountFilter), 'USD')}
+                    <button onClick={() => setAmountFilter('')} className="text-green-500 hover:text-green-700">
+                      <X className="w-3 h-3" />
+                    </button>
+                  </span>
+                )}
+              </div>
+              <button
+                onClick={resetCategoryPriorityFilter}
+                className="text-blue-500 hover:text-blue-700 text-xs font-medium"
+              >
+                Clear category & priority filters
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+
+  const DateFilterDropdown = () => (
+    <div className="relative">
+      <button
+        onClick={() => setShowDateFilter(!showDateFilter)}
+        className="flex items-center gap-2 bg-white hover:bg-slate-50 text-slate-700 px-4 py-2.5 rounded-xl font-semibold shadow-md hover:shadow-lg transition-all border border-slate-200 text-xs"
+      >
+        <Calendar className="w-4 h-4" />
+        Date Filter
+        {dateFilter !== 'all' && (
+          <span className="bg-blue-500 text-white rounded-full w-2 h-2"></span>
+        )}
+      </button>
+
+      {showDateFilter && (
+        <div className="absolute top-full right-0 mt-2 bg-white rounded-2xl shadow-xl border border-slate-200 p-4 w-80 z-50">
+          <div className="flex justify-between items-center mb-4">
+            <h3 className="text-sm font-semibold text-slate-900">Filter by Date</h3>
+            <button 
+              onClick={() => setShowDateFilter(false)}
+              className="text-slate-400 hover:text-slate-600 transition-colors p-1 rounded-lg"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+
+          <div className="space-y-2 mb-4">
+            {dateFilterOptions.map(option => (
+              <button
+                key={option.value}
+                onClick={() => {
+                  setDateFilter(option.value);
+                  if (option.value !== 'custom') {
+                    setShowDateFilter(false);
+                  }
+                }}
+                className={`w-full text-left px-3 py-2 rounded-lg text-xs font-medium transition-all ${
+                  dateFilter === option.value
+                    ? 'bg-blue-50 text-blue-700 border border-blue-200'
+                    : 'bg-slate-50 text-slate-700 hover:bg-slate-100'
+                }`}
+              >
+                {option.label}
+              </button>
+            ))}
+          </div>
+
+          {dateFilter === 'custom' && (
+            <div className="space-y-3 pt-4 border-t border-slate-200">
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-2">Start Date</label>
+                <input
+                  type="date"
+                  value={customStartDate}
+                  onChange={(e) => setCustomStartDate(e.target.value)}
+                  className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all text-xs"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-2">End Date</label>
+                <input
+                  type="date"
+                  value={customEndDate}
+                  onChange={(e) => setCustomEndDate(e.target.value)}
+                  className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all text-xs"
+                />
+              </div>
+              <div className="flex gap-2">
+                <button
+                  onClick={() => setShowDateFilter(false)}
+                  className="flex-1 bg-blue-500 hover:bg-blue-600 text-white py-2 rounded-lg font-semibold transition-all text-xs"
+                >
+                  Apply Filter
+                </button>
+                <button
+                  onClick={resetDateFilter}
+                  className="flex-1 bg-slate-100 hover:bg-slate-200 text-slate-700 py-2 rounded-lg font-semibold transition-all text-xs"
+                >
+                  Clear
+                </button>
+              </div>
+            </div>
+          )}
+
+          {dateFilter !== 'all' && dateFilter !== 'custom' && (
+            <div className="pt-4 border-t border-slate-200">
+              <p className="text-xs text-slate-600">
+                Showing: {dateFilterOptions.find(opt => opt.value === dateFilter)?.label}
+              </p>
+              <button
+                onClick={resetDateFilter}
+                className="text-blue-500 hover:text-blue-700 text-xs font-medium mt-2"
+              >
+                Clear filter
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+
+  const renderCountryFlag = (countryCode: string, size: string = '1em') => {
+    if (!countryCode || countryCode === 'ALL' || countryCode === 'XX') {
+      return <Globe className="w-3 h-3" />;
+    }
+    
+    try {
+      return (
+        <ReactCountryFlag
+          countryCode={countryCode}
+          svg
+          style={{
+            width: size,
+            height: size,
+          }}
+          title={getCountryName(countryCode)}
+        />
+      );
+    } catch (error) {
+      return <Globe className="w-3 h-3" />;
+    }
+  };
+
+  if (loading) return <LoadingSpinner />;
 
   return (
     <div className="space-y-6">
       <div className="flex justify-between items-center">
         <div>
-          <h2 className="text-2xl font-semibold text-slate-900 mb-1">Queue Items</h2>
+          <h2 className="text-2xl font-semibold text-slate-900 mb-1">Queue Management</h2>
           <div className="flex items-center gap-2">
             <p className="text-xs text-slate-500">
-              {filteredQueues.length} of {queues.length} items
-              {!['admin', 'operations'].includes(userRole) && ' (only your items)'}
+              {filteredQueues.length} items • {['admin', 'operations'].includes(userRole) ? 'All users' : 'Only your items'}
             </p>
-            <span className={`inline-flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-semibold border ${getRoleColor()}`}>
-              {getRoleIcon()}
+            <span className={`inline-flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-semibold border ${getRoleColor(userRole)}`}>
+              {getRoleIcon(userRole)}
               {userRole}
               {roleLoading && '...'}
             </span>
           </div>
         </div>
         <div className="flex items-center gap-3">
-          {/* Branch & Country Filter Button */}
-          <div className="relative">
-            <button
-              onClick={() => setShowBranchCountryFilter(!showBranchCountryFilter)}
-              className="flex items-center gap-2 bg-white hover:bg-slate-50 text-slate-700 px-4 py-2.5 rounded-xl font-semibold shadow-md hover:shadow-lg transition-all border border-slate-200 text-xs"
-            >
-              <Building className="w-4 h-4" />
-              Branch & Country
-              {(branchFilter || countryFilter) && (
-                <span className="bg-blue-500 text-white rounded-full w-2 h-2"></span>
-              )}
-            </button>
+          {/* Category & Priority Filter */}
+          <CategoryPriorityFilterDropdown />
 
-            {/* Branch & Country Filter Dropdown */}
-            {showBranchCountryFilter && (
-              <div className="absolute top-full right-0 mt-2 bg-white rounded-2xl shadow-xl border border-slate-200 p-4 w-80 z-50">
-                <div className="flex justify-between items-center mb-4">
-                  <h3 className="text-sm font-semibold text-slate-900">Filter by Branch & Country</h3>
-                  <button 
-                    onClick={() => setShowBranchCountryFilter(false)}
-                    className="text-slate-400 hover:text-slate-600 transition-colors p-1 rounded-lg"
-                  >
-                    <X className="w-4 h-4" />
-                  </button>
-                </div>
-
-                {/* Branch Filter */}
-                <div className="mb-4">
-                  <label className="block text-xs font-semibold text-slate-700 mb-2">Branch Name</label>
-                  <input
-                    type="text"
-                    value={branchFilter}
-                    onChange={(e) => setBranchFilter(e.target.value)}
-                    placeholder="Search branch name..."
-                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all text-xs"
-                  />
-                  {availableBranches.length > 0 && (
-                    <div className="mt-2 max-h-32 overflow-y-auto">
-                      {availableBranches.map(branch => (
-                        <button
-                          key={branch}
-                          onClick={() => setBranchFilter(branch)}
-                          className={`w-full text-left px-2 py-1.5 rounded text-xs transition-all ${
-                            branchFilter === branch
-                              ? 'bg-blue-50 text-blue-700'
-                              : 'text-slate-600 hover:bg-slate-50'
-                          }`}
-                        >
-                          {branch}
-                        </button>
-                      ))}
-                    </div>
-                  )}
-                </div>
-
-                {/* Country Filter */}
-                <div className="mb-4">
-                  <label className="block text-xs font-semibold text-slate-700 mb-2">Country</label>
-                  <select
-                    value={countryFilter}
-                    onChange={(e) => setCountryFilter(e.target.value)}
-                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all text-xs"
-                  >
-                    <option value="">All Countries</option>
-                    {countries.map(country => (
-                      <option key={country.code} value={country.code}>
-                        {country.name}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
-                {/* Active Filter Info */}
-                {(branchFilter || countryFilter) && (
-                  <div className="pt-3 border-t border-slate-200">
-                    <div className="flex flex-wrap gap-2 mb-3">
-                      {branchFilter && (
-                        <span className="inline-flex items-center gap-1 px-2 py-1 bg-blue-50 text-blue-700 rounded text-xs">
-                          Branch: {branchFilter}
-                          <button onClick={() => setBranchFilter('')} className="text-blue-500 hover:text-blue-700">
-                            <X className="w-3 h-3" />
-                          </button>
-                        </span>
-                      )}
-                      {countryFilter && (
-                        <span className="inline-flex items-center gap-1 px-2 py-1 bg-purple-50 text-purple-700 rounded text-xs">
-                          Country: {getCountryName(countryFilter)}
-                          <button onClick={() => setCountryFilter('')} className="text-purple-500 hover:text-purple-700">
-                            <X className="w-3 h-3" />
-                          </button>
-                        </span>
-                      )}
-                    </div>
-                    <button
-                      onClick={resetBranchCountryFilter}
-                      className="text-blue-500 hover:text-blue-700 text-xs font-medium"
-                    >
-                      Clear branch & country filters
-                    </button>
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
-
-          {/* Date Filter Button */}
-          <div className="relative">
-            <button
-              onClick={() => setShowDateFilter(!showDateFilter)}
-              className="flex items-center gap-2 bg-white hover:bg-slate-50 text-slate-700 px-4 py-2.5 rounded-xl font-semibold shadow-md hover:shadow-lg transition-all border border-slate-200 text-xs"
-            >
-              <Filter className="w-4 h-4" />
-              Filter by Date
-              {dateFilter !== 'all' && (
-                <span className="bg-blue-500 text-white rounded-full w-2 h-2"></span>
-              )}
-            </button>
-
-            {/* Date Filter Dropdown */}
-            {showDateFilter && (
-              <div className="absolute top-full right-0 mt-2 bg-white rounded-2xl shadow-xl border border-slate-200 p-4 w-80 z-50">
-                <div className="flex justify-between items-center mb-4">
-                  <h3 className="text-sm font-semibold text-slate-900">Filter by Date</h3>
-                  <button 
-                    onClick={() => setShowDateFilter(false)}
-                    className="text-slate-400 hover:text-slate-600 transition-colors p-1 rounded-lg"
-                  >
-                    <X className="w-4 h-4" />
-                  </button>
-                </div>
-
-                {/* Quick Date Options */}
-                <div className="space-y-2 mb-4">
-                  {dateFilterOptions.map(option => (
-                    <button
-                      key={option.value}
-                      onClick={() => {
-                        setDateFilter(option.value);
-                        if (option.value !== 'custom') {
-                          setShowDateFilter(false);
-                        }
-                      }}
-                      className={`w-full text-left px-3 py-2 rounded-lg text-xs font-medium transition-all ${
-                        dateFilter === option.value
-                          ? 'bg-blue-50 text-blue-700 border border-blue-200'
-                          : 'bg-slate-50 text-slate-700 hover:bg-slate-100'
-                      }`}
-                    >
-                      {option.label}
-                    </button>
-                  ))}
-                </div>
-
-                {/* Custom Date Range */}
-                {dateFilter === 'custom' && (
-                  <div className="space-y-3 pt-4 border-t border-slate-200">
-                    <div>
-                      <label className="block text-xs font-semibold text-slate-700 mb-2">Start Date</label>
-                      <input
-                        type="date"
-                        value={customStartDate}
-                        onChange={(e) => setCustomStartDate(e.target.value)}
-                        className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all text-xs"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-xs font-semibold text-slate-700 mb-2">End Date</label>
-                      <input
-                        type="date"
-                        value={customEndDate}
-                        onChange={(e) => setCustomEndDate(e.target.value)}
-                        className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all text-xs"
-                      />
-                    </div>
-                    <div className="flex gap-2">
-                      <button
-                        onClick={() => setShowDateFilter(false)}
-                        className="flex-1 bg-blue-500 hover:bg-blue-600 text-white py-2 rounded-lg font-semibold transition-all text-xs"
-                      >
-                        Apply Filter
-                      </button>
-                      <button
-                        onClick={resetDateFilter}
-                        className="flex-1 bg-slate-100 hover:bg-slate-200 text-slate-700 py-2 rounded-lg font-semibold transition-all text-xs"
-                      >
-                        Clear
-                      </button>
-                    </div>
-                  </div>
-                )}
-
-                {/* Active Filter Info */}
-                {dateFilter !== 'all' && dateFilter !== 'custom' && (
-                  <div className="pt-4 border-t border-slate-200">
-                    <p className="text-xs text-slate-600">
-                      Showing: {dateFilterOptions.find(opt => opt.value === dateFilter)?.label}
-                    </p>
-                    <button
-                      onClick={resetDateFilter}
-                      className="text-blue-500 hover:text-blue-700 text-xs font-medium mt-2"
-                    >
-                      Clear filter
-                    </button>
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
+          {/* Date Filter */}
+          <DateFilterDropdown />
 
           {/* Clear All Filters Button */}
           {hasActiveFilters() && (
@@ -931,6 +1837,16 @@ export function QueueList() {
         </div>
       </div>
 
+      {/* Add Dashboard Summary */}
+      <DashboardSummary 
+        filteredQueues={filteredQueues}
+        user={user}
+        canManageAllQueues={canManageAllQueues()}
+      />
+
+      {/* Tabs */}
+      <Tabs />
+
       {/* Active Filters Display */}
       {hasActiveFilters() && (
         <div className="bg-blue-50 border border-blue-200 rounded-xl p-4">
@@ -948,20 +1864,29 @@ export function QueueList() {
                     </button>
                   </span>
                 )}
-                {branchFilter && (
+                {categoryFilter && (
                   <span className="inline-flex items-center gap-1 px-2 py-1 bg-blue-100 text-blue-700 rounded-lg text-xs font-medium">
-                    <Building className="w-3 h-3" />
-                    Branch: {branchFilter}
-                    <button onClick={() => setBranchFilter('')} className="text-blue-500 hover:text-blue-700">
+                    <Tag className="w-3 h-3" />
+                    Category: {categoryFilter.charAt(0).toUpperCase() + categoryFilter.slice(1)}
+                    <button onClick={() => setCategoryFilter('')} className="text-blue-500 hover:text-blue-700">
                       <X className="w-3 h-3" />
                     </button>
                   </span>
                 )}
-                {countryFilter && (
+                {priorityFilter && (
                   <span className="inline-flex items-center gap-1 px-2 py-1 bg-purple-100 text-purple-700 rounded-lg text-xs font-medium">
-                    <Globe className="w-3 h-3" />
-                    Country: {getCountryName(countryFilter)}
-                    <button onClick={() => setCountryFilter('')} className="text-purple-500 hover:text-purple-700">
+                    <AlertCircle className="w-3 h-3" />
+                    Priority: {priorityFilter.charAt(0).toUpperCase() + priorityFilter.slice(1)}
+                    <button onClick={() => setPriorityFilter('')} className="text-purple-500 hover:text-purple-700">
+                      <X className="w-3 h-3" />
+                    </button>
+                  </span>
+                )}
+                {amountFilter && (
+                  <span className="inline-flex items-center gap-1 px-2 py-1 bg-green-100 text-green-700 rounded-lg text-xs font-medium">
+                    <DollarSign className="w-3 h-3" />
+                    Min: {formatCurrency(parseFloat(amountFilter), 'USD')}
+                    <button onClick={() => setAmountFilter('')} className="text-green-500 hover:text-green-700">
                       <X className="w-3 h-3" />
                     </button>
                   </span>
@@ -977,6 +1902,16 @@ export function QueueList() {
           </div>
         </div>
       )}
+
+      {/* Queue Form Modal */}
+      <QueueFormModal 
+        isOpen={showForm}
+        onClose={closeForm}
+        onSubmit={handleSubmit}
+        onUpdate={handleUpdate}
+        user={user}
+        editingQueue={editingQueue}
+      />
 
       {/* Decision Modal */}
       {showDecisionModal && selectedQueue && (
@@ -999,7 +1934,7 @@ export function QueueList() {
                 <h4 className="font-semibold text-slate-900 mb-2">{selectedQueue.title}</h4>
                 {selectedQueue.amount && (
                   <p className="text-sm text-slate-600">
-                    Amount: ${selectedQueue.amount.toFixed(2)}
+                                        Amount: {formatCurrency(selectedQueue.amount, selectedQueue.currency)}
                     {selectedQueue.amount > 500 && userRole === 'operations' && (
                       <span className="text-amber-600 text-xs ml-2">(Requires admin approval)</span>
                     )}
@@ -1044,513 +1979,285 @@ export function QueueList() {
         </div>
       )}
 
-      {/* Form Modal */}
-      {showForm && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-2xl shadow-xl w-full max-w-4xl max-h-[90vh] overflow-y-auto">
-            <div className="flex justify-between items-center p-6 border-b border-slate-200 sticky top-0 bg-white z-10">
-              <h3 className="text-xl font-semibold text-slate-900">Create New Queue Item</h3>
-              <button 
-                onClick={() => {
-                  setShowForm(false);
-                  setFormData({ 
-                    title: '', 
-                    description: '', 
-                    amount: '', 
-                    category: 'expense', 
-                    priority: 'medium',
-                    branchName: '',
-                    country: '',
-                    receipt: null
-                  });
-                }}
-                className="text-slate-400 hover:text-slate-600 transition-colors p-1 rounded-lg"
+      {/* Queue Items Grid */}
+      {filteredQueues.length === 0 ? (
+        <EmptyState />
+      ) : (
+        <>
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+            {currentItems.map((queue) => (
+              <div
+                key={queue.id}
+                className="group bg-white/70 backdrop-blur-xl rounded-2xl shadow-md hover:shadow-xl p-5 border border-slate-200/60 transition-all duration-300 hover:scale-[1.02] flex flex-col h-full"
               >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-            
-            <form onSubmit={handleSubmit} className="p-6">
-              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                {/* Left Column - Basic Info */}
-                <div className="space-y-4">
-                  <div>
-                    <label className="block text-xs font-semibold text-slate-700 mb-2">
-                      Title <span className="text-red-500">*</span>
-                    </label>
-                    <input
-                      type="text"
-                      value={formData.title}
-                      onChange={(e) => setFormData({ ...formData, title: e.target.value })}
-                      className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all placeholder:text-slate-400 text-xs"
-                      placeholder="Enter item title"
-                      required
-                      minLength={1}
-                    />
-                  </div>
-
-                  <div>
-                    <label className="block text-xs font-semibold text-slate-700 mb-2">Description</label>
-                    <textarea
-                      value={formData.description}
-                      onChange={(e) => setFormData({ ...formData, description: e.target.value })}
-                      className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all resize-none placeholder:text-slate-400 text-xs"
-                      rows={3}
-                      placeholder="Add a description (optional)"
-                      maxLength={500}
-                    />
-                    <div className="text-right text-xs text-slate-400 mt-1">
-                      {formData.description.length}/500
-                    </div>
-                  </div>
-
-                  {/* Receipt Upload */}
-                  <div>
-                    <label className="block text-xs font-semibold text-slate-700 mb-2">
-                      Receipt (Optional)
-                    </label>
-                    <div className={`border-2 border-dashed rounded-xl p-4 transition-all ${
-                      formData.receipt 
-                        ? 'border-green-300 bg-green-50/50' 
-                        : 'border-slate-200 hover:border-blue-300 hover:bg-blue-50/50'
-                    }`}>
-                      <input
-                        type="file"
-                        id="receipt-upload"
-                        onChange={handleFileChange}
-                        className="hidden"
-                        accept={Object.keys(ACCEPTED_FILE_TYPES).join(',')}
-                      />
-                      <label htmlFor="receipt-upload" className="cursor-pointer block">
-                        <div className="text-center">
-                          {formData.receipt ? (
-                            <FileText className="w-8 h-8 text-green-500 mx-auto mb-2" />
-                          ) : (
-                            <Upload className="w-8 h-8 text-slate-400 mx-auto mb-2" />
-                          )}
-                          <p className="text-xs text-slate-600 font-medium mb-1">
-                            {formData.receipt ? formData.receipt.name : 'Click to upload receipt'}
-                          </p>
-                          <p className="text-xs text-slate-400">
-                            Supports: JPG, PNG, PDF, DOC (Max 5MB)
-                          </p>
-                          {formData.receipt && (
-                            <button
-                              type="button"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                setFormData({ ...formData, receipt: null });
-                              }}
-                              className="mt-2 text-red-500 hover:text-red-700 text-xs font-medium"
-                            >
-                              Remove file
-                            </button>
-                          )}
-                        </div>
-                      </label>
-                    </div>
+                {/* Header with title and actions */}
+                <div className="flex justify-between items-start mb-3">
+                  <h3 className="text-sm font-semibold text-slate-900 leading-tight flex-1 pr-2 line-clamp-2">
+                    {queue.title}
+                  </h3>
+                  <div className="flex items-center gap-1 flex-shrink-0">
+                    {queue.user_id === user?.id && (
+                      <button
+                        onClick={() => startEditing(queue)}
+                        className="text-slate-400 hover:text-blue-500 transition-all p-1.5 rounded-lg hover:bg-blue-50"
+                        title="Edit"
+                      >
+                        <Edit2 className="w-3.5 h-3.5" />
+                      </button>
+                    )}
+                    {queue.user_id === user?.id && (
+                      <button
+                        onClick={() => handleDelete(queue.id)}
+                        className="text-slate-400 hover:text-red-500 transition-all p-1.5 rounded-lg hover:bg-red-50"
+                        title="Delete"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    )}
                   </div>
                 </div>
 
-                {/* Right Column - Details */}
-                <div className="space-y-4">
-                  <div className="grid grid-cols-2 gap-4">
-                    <div>
-                      <label className="block text-xs font-semibold text-slate-700 mb-2">Amount</label>
-                      <div className="relative">
-                        <DollarSign className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
-                        <input
-                          type="number"
-                          step="0.01"
-                          min="0"
-                          value={formData.amount}
-                          onChange={(e) => setFormData({ ...formData, amount: e.target.value })}
-                          className="w-full pl-9 pr-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all placeholder:text-slate-400 text-xs"
-                          placeholder="0.00"
-                        />
-                      </div>
-                    </div>
+                {/* Show creator email for admin/operations */}
+                {canManageAllQueues() && queue.user_email && (
+                  <p className="text-xs text-slate-500 mb-2">By: {queue.user_email}</p>
+                )}
 
-                    <div>
-                      <label className="block text-xs font-semibold text-slate-700 mb-2">Priority</label>
-                      <select
-                        value={formData.priority}
-                        onChange={(e) => setFormData({ ...formData, priority: e.target.value })}
-                        className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all appearance-none cursor-pointer text-xs"
-                      >
-                        {priorities.map((priority) => (
-                          <option key={priority} value={priority}>
-                            {priority.charAt(0).toUpperCase() + priority.slice(1)}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
+                {/* Description */}
+                {queue.description && (
+                  <p className="text-slate-600 text-xs leading-relaxed mb-3 line-clamp-2 flex-1">
+                    {queue.description}
+                  </p>
+                )}
+
+                {/* Tags */}
+                <div className="flex flex-wrap gap-1.5 mb-4">
+                  {queue.amount && (
+                    <span className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-gradient-to-r from-emerald-50 to-emerald-100/80 text-emerald-700 text-xs font-semibold border border-emerald-200/60">
+                      <DollarSign className="w-3 h-3" />
+                      {formatCurrency(queue.amount, queue.currency)}
+                      {queue.amount > 500 && (
+                        <span className="text-xs">⚠️</span>
+                      )}
+                    </span>
+                  )}
+                  <span className={`inline-flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-semibold border ${getPriorityColor(queue.priority)}`}>
+                    <AlertCircle className="w-3 h-3" />
+                    {queue.priority}
+                  </span>
+                  <span className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-slate-50 text-slate-700 text-xs font-semibold border border-slate-200">
+                    <Tag className="w-3 h-3" />
+                    {queue.category}
+                  </span>
+                </div>
+
+                {/* Branch and Country Info */}
+                {(queue.branch_name || queue.country) && (
+                  <div className="flex flex-wrap gap-1.5 mb-3">
+                    {queue.branch_name && (
+                      <span className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-blue-50 text-blue-700 text-xs font-semibold border border-blue-200">
+                        <Building className="w-3 h-3" />
+                        {queue.branch_name}
+                      </span>
+                    )}
+                    {queue.country && queue.country !== 'XX' && queue.country !== 'ALL' && (
+                      <span className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-purple-50 text-purple-700 text-xs font-semibold border border-purple-200">
+                        {renderCountryFlag(queue.country)}
+                        {getCountryName(queue.country)}
+                      </span>
+                    )}
+                    {queue.country === 'XX' && (
+                      <span className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-purple-50 text-purple-700 text-xs font-semibold border border-purple-200">
+                        <Globe className="w-3 h-3" />
+                        Other
+                      </span>
+                    )}
                   </div>
+                )}
 
-                  {/* Branch and Country Fields */}
-                  <div className="grid grid-cols-2 gap-4">
-                    <div>
-                      <label className="block text-xs font-semibold text-slate-700 mb-2">Branch Name</label>
-                      <div className="relative">
-                        <Building className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
-                        <input
-                          type="text"
-                          value={formData.branchName}
-                          onChange={(e) => setFormData({ ...formData, branchName: e.target.value })}
-                          className="w-full pl-9 pr-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all placeholder:text-slate-400 text-xs"
-                          placeholder="Enter branch name"
-                          maxLength={100}
-                        />
-                      </div>
-                    </div>
-
-                    <div>
-                      <label className="block text-xs font-semibold text-slate-700 mb-2">Country</label>
-                      <div className="relative">
-                        <Globe className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 z-10" />
-                        <select
-                          value={formData.country}
-                          onChange={(e) => setFormData({ ...formData, country: e.target.value })}
-                          className="w-full pl-9 pr-10 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all appearance-none cursor-pointer text-xs relative z-0"
-                        >
-                          <option value="">Select country</option>
-                          {countries.map((country) => (
-                            <option key={country.code} value={country.code}>
-                              {country.name}
-                            </option>
-                          ))}
-                        </select>
-                        <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 pointer-events-none" />
-                      </div>
-                    </div>
-                  </div>
-
+                {/* File Upload Sections */}
+                <div className="space-y-3 mb-3">
+                  {/* Receipt Section */}
                   <div>
-                    <label className="block text-xs font-semibold text-slate-700 mb-2">Category</label>
-                    <div className="grid grid-cols-3 gap-2">
-                      {categories.map((cat) => (
-                        <button
-                          key={cat}
-                          type="button"
-                          onClick={() => setFormData({ ...formData, category: cat })}
-                          className={`p-3 rounded-xl border text-xs font-medium transition-all ${
-                            formData.category === cat
-                              ? 'bg-blue-50 border-blue-200 text-blue-700 shadow-sm'
-                              : 'bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100'
-                          }`}
+                    {queue.receipt_url ? (
+                      <div className="flex items-center justify-between p-2 bg-green-50 border border-green-200 rounded-lg">
+                        <div className="flex items-center gap-2">
+                          {getFileIcon(queue.receipt_name || '')}
+                          <span className="text-xs font-medium text-green-700 truncate flex-1">
+                            {queue.receipt_name}
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-1">
+                          <a
+                            href={queue.receipt_url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="p-1 text-green-600 hover:text-green-800 transition-colors"
+                            title="Download receipt"
+                          >
+                            <Download className="w-3 h-3" />
+                          </a>
+                          <button
+                            onClick={() => handleFileDelete(queue.id, 'receipt')}
+                            className="p-1 text-red-500 hover:text-red-700 transition-colors"
+                            title="Remove receipt"
+                          >
+                            <Trash2 className="w-3 h-3" />
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="relative">
+                        <input
+                          type="file"
+                          id={`receipt-${queue.id}`}
+                          onChange={(e) => handleEditFileChange(e, queue.id, 'receipt')}
+                          className="hidden"
+                          accept={Object.keys(ACCEPTED_FILE_TYPES).join(',')}
+                        />
+                        <label
+                          htmlFor={`receipt-${queue.id}`}
+                          className="flex items-center gap-2 p-2 border border-dashed border-slate-300 rounded-lg hover:border-blue-400 hover:bg-blue-50/50 transition-all cursor-pointer"
                         >
-                          {cat.charAt(0).toUpperCase() + cat.slice(1)}
-                        </button>
+                          <Upload className="w-3 h-3 text-slate-400" />
+                          <span className="text-xs text-slate-600 font-medium">Upload receipt</span>
+                        </label>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Invoice Section */}
+                  <div>
+                    {queue.invoice_url ? (
+                      <div className="flex items-center justify-between p-2 bg-blue-50 border border-blue-200 rounded-lg">
+                        <div className="flex items-center gap-2">
+                          {getFileIcon(queue.invoice_name || '')}
+                          <span className="text-xs font-medium text-blue-700 truncate flex-1">
+                            {queue.invoice_name}
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-1">
+                          <a
+                            href={queue.invoice_url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="p-1 text-blue-600 hover:text-blue-800 transition-colors"
+                            title="Download invoice"
+                          >
+                            <Download className="w-3 h-3" />
+                          </a>
+                          <button
+                            onClick={() => handleFileDelete(queue.id, 'invoice')}
+                            className="p-1 text-red-500 hover:text-red-700 transition-colors"
+                            title="Remove invoice"
+                          >
+                            <Trash2 className="w-3 h-3" />
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="relative">
+                        <input
+                          type="file"
+                          id={`invoice-${queue.id}`}
+                          onChange={(e) => handleEditFileChange(e, queue.id, 'invoice')}
+                          className="hidden"
+                          accept={Object.keys(ACCEPTED_FILE_TYPES).join(',')}
+                        />
+                        <label
+                          htmlFor={`invoice-${queue.id}`}
+                          className="flex items-center gap-2 p-2 border border-dashed border-slate-300 rounded-lg hover:border-blue-400 hover:bg-blue-50/50 transition-all cursor-pointer"
+                        >
+                          <Upload className="w-3 h-3 text-slate-400" />
+                          <span className="text-xs text-slate-600 font-medium">Upload invoice</span>
+                        </label>
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {/* Decision History */}
+                {queue.decisions && queue.decisions.length > 0 && (
+                  <div className="mb-3">
+                    <div className="text-xs font-semibold text-slate-700 mb-2">Decision History</div>
+                    <div className="space-y-2">
+                      {queue.decisions.map((decision) => (
+                        <div key={decision.id} className="flex items-start gap-2 p-2 bg-slate-50 rounded-lg">
+                          <div className={`w-2 h-2 rounded-full mt-1.5 ${
+                            decision.status === 'approved' ? 'bg-green-500' : 'bg-red-500'
+                          }`} />
+                          <div className="flex-1">
+                            <div className="flex justify-between items-center">
+                              <span className={`text-xs font-semibold ${
+                                decision.status === 'approved' ? 'text-green-700' : 'text-red-700'
+                              }`}>
+                                {decision.status}
+                              </span>
+                              <span className="text-xs text-slate-500">
+                                {new Date(decision.created_at).toLocaleDateString()}
+                              </span>
+                            </div>
+                            {decision.comment && (
+                              <p className="text-xs text-slate-600 mt-1">{decision.comment}</p>
+                            )}
+                            {decision.user_email && (
+                              <p className="text-xs text-slate-400 mt-1">by {decision.user_email}</p>
+                            )}
+                          </div>
+                        </div>
                       ))}
                     </div>
                   </div>
-
-                  {/* Country Preview */}
-                  {formData.country && formData.country !== 'XX' && (
-                    <div className="pt-2">
-                      <label className="block text-xs font-semibold text-slate-700 mb-2">Selected Country</label>
-                      <div className="flex items-center gap-3 px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl">
-                        <ReactCountryFlag
-                          countryCode={formData.country}
-                          svg
-                          style={{
-                            width: '1.5em',
-                            height: '1.5em',
-                          }}
-                          title={getCountryName(formData.country)}
-                        />
-                        <span className="text-sm font-medium text-slate-700">
-                          {getCountryName(formData.country)}
-                        </span>
-                      </div>
-                    </div>
-                  )}
-                </div>
-              </div>
-
-              {/* Form Actions */}
-              <div className="flex gap-3 pt-6 mt-6 border-t border-slate-200">
-                <button
-                  type="submit"
-                  disabled={uploading || !isFormValid()}
-                  className="flex-1 bg-gradient-to-r from-blue-500 to-blue-600 hover:from-blue-600 hover:to-blue-700 disabled:from-slate-400 disabled:to-slate-500 text-white py-3.5 rounded-xl font-semibold shadow-lg hover:shadow-xl transition-all text-xs disabled:cursor-not-allowed flex items-center justify-center gap-2"
-                >
-                  {uploading ? (
-                    <>
-                      <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
-                      Creating...
-                    </>
-                  ) : (
-                    'Create Queue Item'
-                  )}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setShowForm(false);
-                    setFormData({ 
-                      title: '', 
-                      description: '', 
-                      amount: '', 
-                      category: 'expense', 
-                      priority: 'medium',
-                      branchName: '',
-                      country: '',
-                      receipt: null
-                    });
-                  }}
-                  className="flex-1 bg-slate-100 hover:bg-slate-200 text-slate-700 py-3.5 rounded-xl font-semibold transition-all text-xs"
-                >
-                  Cancel
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
-
-      {/* Queue Items Grid */}
-      {filteredQueues.length === 0 ? (
-        <div className="bg-white/60 backdrop-blur-xl rounded-3xl shadow-lg p-16 text-center border border-slate-200/60">
-          <div className="w-20 h-20 bg-gradient-to-br from-slate-100  rounded-2xl flex items-center justify-center mx-auto mb-6">
-            <RadioTower className="w-10 h-10 text-slate-300" />
-          </div>
-          <h3 className="text-xl font-base text-slate-900 mb-2">
-            {queues.length === 0 ? 'No Items Yet' : 'No Items Match Your Filter'}
-          </h3>
-          <p className="text-xs text-slate-500">
-            {queues.length === 0 
-              ? 'Create your first queue item to get started' 
-              : 'Try adjusting your filters to see more results'
-            }
-          </p>
-          {queues.length > 0 && hasActiveFilters() && (
-            <button
-              onClick={resetAllFilters}
-              className="mt-4 text-blue-500 hover:text-blue-700 text-xs font-medium"
-            >
-              Clear all filters
-            </button>
-          )}
-        </div>
-      ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-          {filteredQueues.map((queue) => (
-            <div
-              key={queue.id}
-              className="group bg-white/70 backdrop-blur-xl rounded-2xl shadow-md hover:shadow-xl p-5 border border-slate-200/60 transition-all duration-300 hover:scale-[1.02] flex flex-col h-full"
-            >
-              {/* Header with title and delete button */}
-              <div className="flex justify-between items-start mb-3">
-                <h3 className="text-sm font-semibold text-slate-900 leading-tight flex-1 pr-2 line-clamp-2">
-                  {queue.title}
-                </h3>
-                {queue.user_id === user?.id && (
-                  <button
-                    onClick={() => handleDelete(queue.id)}
-                    className="text-slate-400 hover:text-red-500 transition-all p-1.5 rounded-lg hover:bg-red-50 opacity-0 group-hover:opacity-100 flex-shrink-0"
-                  >
-                    <Trash2 className="w-3.5 h-3.5" />
-                  </button>
                 )}
-              </div>
 
-              {/* Show creator email for admin/operations */}
-              {['admin', 'operations'].includes(userRole) && queue.user_email && (
-                <p className="text-xs text-slate-500 mb-2">By: {queue.user_email}</p>
-              )}
-
-              {/* Description */}
-              {queue.description && (
-                <p className="text-slate-600 text-xs leading-relaxed mb-3 line-clamp-2 flex-1">
-                  {queue.description}
-                </p>
-              )}
-
-              {/* Tags */}
-              <div className="flex flex-wrap gap-1.5 mb-4">
-                {queue.amount && (
-                  <span className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-gradient-to-r from-emerald-50 to-emerald-100/80 text-emerald-700 text-xs font-semibold border border-emerald-200/60">
-                    <DollarSign className="w-3 h-3" />
-                    {queue.amount.toFixed(2)}
-                    {queue.amount > 500 && (
-                      <span className="text-xs">⚠️</span>
-                    )}
-                  </span>
-                )}
-                <span className={`inline-flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-semibold border ${getPriorityColor(queue.priority)}`}>
-                  <AlertCircle className="w-3 h-3" />
-                  {queue.priority}
-                </span>
-                <span className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-slate-50 text-slate-700 text-xs font-semibold border border-slate-200">
-                  <Tag className="w-3 h-3" />
-                  {queue.category}
-                </span>
-              </div>
-
-              {/* Receipt Section */}
-              <div className="mb-3">
-                {queue.receipt_url ? (
-                  <div className="flex items-center justify-between p-2 bg-green-50 border border-green-200 rounded-lg">
-                    <div className="flex items-center gap-2">
-                      {getFileIcon(queue.receipt_name || '')}
-                      <span className="text-xs font-medium text-green-700 truncate flex-1">
-                        {queue.receipt_name}
-                      </span>
-                    </div>
-                    <div className="flex items-center gap-1">
-                      <a
-                        href={queue.receipt_url}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="p-1 text-green-600 hover:text-green-800 transition-colors"
-                        title="Download receipt"
-                      >
-                        <Download className="w-3 h-3" />
-                      </a>
+                {/* Status buttons and date */}
+                <div className="mt-auto pt-3 border-t border-slate-100">
+                  {/* Approval/Rejection buttons for admin/operations */}
+                  {canApproveReject() && queue.status === 'pending' && (
+                    <div className="flex gap-2 mb-3">
                       <button
-                        onClick={() => handleReceiptDelete(queue.id)}
-                        className="p-1 text-red-500 hover:text-red-700 transition-colors"
-                        title="Remove receipt"
+                        onClick={() => openDecisionModal(queue, 'approved')}
+                        disabled={queue.amount && !canApproveExpense(queue.amount, userRole)}
+                        className={`flex-1 flex items-center justify-center gap-1 py-2 rounded-lg text-xs font-semibold transition-all ${
+                          queue.amount && !canApproveExpense(queue.amount, userRole)
+                            ? 'bg-slate-100 text-slate-400 cursor-not-allowed'
+                            : 'bg-green-500 hover:bg-green-600 text-white hover:scale-105'
+                        }`}
+                        title={
+                          queue.amount && !canApproveExpense(queue.amount, userRole)
+                            ? 'Only admin can approve expenses above $500'
+                            : 'Approve'
+                        }
                       >
-                        <Trash2 className="w-3 h-3" />
+                        <Check className="w-3 h-3" />
+                        Approve
+                      </button>
+                      <button
+                        onClick={() => openDecisionModal(queue, 'rejected')}
+                        className="flex-1 flex items-center justify-center gap-1 py-2 rounded-lg text-xs font-semibold bg-red-500 hover:bg-red-600 text-white transition-all hover:scale-105"
+                      >
+                        <XIcon className="w-3 h-3" />
+                        Reject
                       </button>
                     </div>
-                  </div>
-                ) : (
-                  <div className="relative">
-                    <input
-                      type="file"
-                      id={`receipt-${queue.id}`}
-                      onChange={(e) => {
-                        const file = e.target.files?.[0];
-                        if (file) handleReceiptUpload(file, queue.id);
-                      }}
-                      className="hidden"
-                      accept={Object.keys(ACCEPTED_FILE_TYPES).join(',')}
-                    />
-                    <label
-                      htmlFor={`receipt-${queue.id}`}
-                      className="flex items-center gap-2 p-2 border border-dashed border-slate-300 rounded-lg hover:border-blue-400 hover:bg-blue-50/50 transition-all cursor-pointer"
-                    >
-                      <Upload className="w-3 h-3 text-slate-400" />
-                      <span className="text-xs text-slate-600 font-medium">Upload receipt</span>
-                    </label>
-                  </div>
-                )}
-              </div>
-
-              {/* Branch and Country Info (if available) */}
-              {(queue.branch_name || queue.country) && (
-                <div className="flex flex-wrap gap-1.5 mb-3">
-                  {queue.branch_name && (
-                    <span className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-blue-50 text-blue-700 text-xs font-semibold border border-blue-200">
-                      <Building className="w-3 h-3" />
-                      {queue.branch_name}
-                    </span>
                   )}
-                  {queue.country && queue.country !== 'XX' && (
-                    <span className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-purple-50 text-purple-700 text-xs font-semibold border border-purple-200">
-                      <ReactCountryFlag
-                        countryCode={queue.country}
-                        svg
-                        style={{
-                          width: '1em',
-                          height: '1em',
-                        }}
-                        title={getCountryName(queue.country)}
-                      />
-                      {getCountryName(queue.country)}
+
+                  <div className="flex items-center justify-between text-xs text-slate-400">
+                    <span className={`px-2 py-1 rounded-md text-xs font-medium ${getStatusColor(queue.status)}`}>
+                      {queue.status}
                     </span>
-                  )}
-                  {queue.country === 'XX' && (
-                    <span className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-purple-50 text-purple-700 text-xs font-semibold border border-purple-200">
-                      <Globe className="w-3 h-3" />
-                      Other
+                    <span className="flex items-center gap-1 font-medium">
+                      <Clock className="w-3 h-3" />
+                      {new Date(queue.created_at).toLocaleDateString()}
                     </span>
-                  )}
-                </div>
-              )}
-
-              {/* Decision History */}
-              {queue.decisions && queue.decisions.length > 0 && (
-                <div className="mb-3">
-                  <div className="text-xs font-semibold text-slate-700 mb-2">Decision History</div>
-                  <div className="space-y-2">
-                    {queue.decisions.map((decision) => (
-                      <div key={decision.id} className="flex items-start gap-2 p-2 bg-slate-50 rounded-lg">
-                        <div className={`w-2 h-2 rounded-full mt-1.5 ${
-                          decision.status === 'approved' ? 'bg-green-500' : 'bg-red-500'
-                        }`} />
-                        <div className="flex-1">
-                          <div className="flex justify-between items-center">
-                            <span className={`text-xs font-semibold ${
-                              decision.status === 'approved' ? 'text-green-700' : 'text-red-700'
-                            }`}>
-                              {decision.status}
-                            </span>
-                            <span className="text-xs text-slate-500">
-                              {new Date(decision.created_at).toLocaleDateString()}
-                            </span>
-                          </div>
-                          {decision.comment && (
-                            <p className="text-xs text-slate-600 mt-1">{decision.comment}</p>
-                          )}
-                          {decision.user_email && (
-                            <p className="text-xs text-slate-400 mt-1">by {decision.user_email}</p>
-                          )}
-                        </div>
-                      </div>
-                    ))}
                   </div>
-                </div>
-              )}
-
-              {/* Status buttons and date */}
-              <div className="mt-auto pt-3 border-t border-slate-100">
-                {/* Approval/Rejection buttons for admin/operations */}
-                {canApproveReject() && queue.status === 'pending' && (
-                  <div className="flex gap-2 mb-3">
-                    <button
-                      onClick={() => openDecisionModal(queue, 'approved')}
-                      disabled={queue.amount && !canApproveExpense(queue.amount, userRole)}
-                      className={`flex-1 flex items-center justify-center gap-1 py-2 rounded-lg text-xs font-semibold transition-all ${
-                        queue.amount && !canApproveExpense(queue.amount, userRole)
-                          ? 'bg-slate-100 text-slate-400 cursor-not-allowed'
-                          : 'bg-green-500 hover:bg-green-600 text-white hover:scale-105'
-                      }`}
-                      title={
-                        queue.amount && !canApproveExpense(queue.amount, userRole)
-                          ? 'Only admin can approve expenses above $500'
-                          : 'Approve'
-                      }
-                    >
-                      <Check className="w-3 h-3" />
-                      Approve
-                    </button>
-                    <button
-                      onClick={() => openDecisionModal(queue, 'rejected')}
-                      className="flex-1 flex items-center justify-center gap-1 py-2 rounded-lg text-xs font-semibold bg-red-500 hover:bg-red-600 text-white transition-all hover:scale-105"
-                    >
-                      <XIcon className="w-3 h-3" />
-                      Reject
-                    </button>
-                  </div>
-                )}
-
-                <div className="flex items-center justify-between text-xs text-slate-400">
-                  <span className={`px-2 py-1 rounded-md text-xs font-medium ${getStatusColor(queue.status)}`}>
-                    {queue.status}
-                  </span>
-                  <span className="flex items-center gap-1 font-medium">
-                    <Clock className="w-3 h-3" />
-                    {new Date(queue.created_at).toLocaleDateString()}
-                  </span>
                 </div>
               </div>
-            </div>
-          ))}
-        </div>
+            ))}
+          </div>
+
+          {/* Pagination */}
+          <Pagination />
+        </>
       )}
     </div>
   );
