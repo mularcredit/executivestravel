@@ -7,7 +7,7 @@ import ReactCountryFlag from 'react-country-flag';
 // Constants-driven architecture
 const QUEUE_CONSTANTS = {
   categories: ['expense', 'request', 'petty cash', 'travel', 'supplies', 'other'] as const,
-  statuses: ['pending', 'approved', 'rejected', 'completed'] as const,
+  statuses: ['pending', 'approved', 'rejected', 'amended', 'completed'] as const,
   priorities: ['low', 'medium', 'high'] as const,
   currencies: ['USD', 'KES', 'SSP'] as const,
   branches: ['All', 'Juba', 'Nairobi'] as const,
@@ -18,7 +18,7 @@ const QUEUE_CONSTANTS = {
     { name: 'Other', code: 'XX' }
   ] as const,
   itemsPerPage: 6,
-  tabs: ['all', 'pending', 'approved', 'rejected', 'my-items', 'requires-attention'] as const,
+  tabs: ['all', 'pending', 'approved', 'rejected', 'amended', 'my-items', 'requires-attention'] as const,
   viewTabs: ['details', 'receipts'] as const
 } as const;
 
@@ -41,11 +41,80 @@ const ACCEPTED_FILE_TYPES = {
   'application/vnd.openxmlformats-officedocument.wordprocessingml.document': ['.docx']
 };
 
-// Currency conversion rates
-const CURRENCY_RATES = {
+// Fallback currency rates
+const FALLBACK_RATES = {
   USD: 1,
   KES: 150,
   SSP: 1000
+};
+
+// Currency conversion service
+const CURRENCY_API_URL = 'https://api.exchangerate-api.com/v4/latest/USD';
+let ratesCache = {
+  timestamp: 0,
+  data: null
+};
+const CACHE_DURATION = 30 * 60 * 1000; // 30 minutes
+
+const getLiveConversionRates = async () => {
+  if (ratesCache.data && Date.now() - ratesCache.timestamp < CACHE_DURATION) {
+    return ratesCache.data;
+  }
+
+  try {
+    const response = await fetch(CURRENCY_API_URL);
+    if (!response.ok) {
+      throw new Error('Failed to fetch conversion rates');
+    }
+    
+    const data = await response.json();
+    
+    ratesCache = {
+      timestamp: Date.now(),
+      data: data.rates
+    };
+    
+    return data.rates;
+  } catch (error) {
+    console.error('Error fetching live conversion rates:', error);
+    return FALLBACK_RATES;
+  }
+};
+
+const convertCurrency = async (amount, fromCurrency, toCurrency) => {
+  if (fromCurrency === toCurrency) return amount;
+  
+  try {
+    const rates = await getLiveConversionRates();
+    
+    if (!rates[toCurrency] || !rates[fromCurrency]) {
+      console.warn(`Rate not available for ${fromCurrency} or ${toCurrency}, using fallback`);
+      const amountInUSD = amount / FALLBACK_RATES[fromCurrency];
+      return amountInUSD * FALLBACK_RATES[toCurrency];
+    }
+    
+    const amountInUSD = amount / rates[fromCurrency];
+    return amountInUSD * rates[toCurrency];
+  } catch (error) {
+    console.error('Error converting currency, using fallback:', error);
+    const amountInUSD = amount / FALLBACK_RATES[fromCurrency];
+    return amountInUSD * FALLBACK_RATES[toCurrency];
+  }
+};
+
+// Sync conversion function for immediate use (uses cached rates)
+const convertCurrencySync = (amount, fromCurrency, toCurrency) => {
+  if (fromCurrency === toCurrency) return amount;
+  
+  const rates = ratesCache.data || FALLBACK_RATES;
+  
+  if (!rates[toCurrency] || !rates[fromCurrency]) {
+    const amountInUSD = amount / FALLBACK_RATES[fromCurrency];
+    return amountInUSD * FALLBACK_RATES[toCurrency];
+  }
+  
+  const amountInUSD = amount / rates[fromCurrency];
+  return amountInUSD * rates[toCurrency];
 };
 
 type Queue = {
@@ -95,6 +164,7 @@ const getStatusColor = (status: string) => {
     case 'pending': return 'bg-blue-100 text-blue-700 border-blue-200';
     case 'approved': return 'bg-green-100 text-green-700 border-green-200';
     case 'rejected': return 'bg-red-100 text-red-700 border-red-200';
+    case 'amended': return 'bg-amber-100 text-amber-700 border-amber-200';
     case 'completed': return 'bg-slate-100 text-slate-700 border-slate-200';
     default: return 'bg-slate-100 text-slate-700 border-slate-200';
   }
@@ -141,18 +211,11 @@ const getFileIcon = (fileName: string) => {
   }
 };
 
-const convertCurrency = (amount: number, fromCurrency: string, toCurrency: string) => {
-  if (fromCurrency === toCurrency) return amount;
-  
-  const amountInUSD = amount / CURRENCY_RATES[fromCurrency as keyof typeof CURRENCY_RATES];
-  return amountInUSD * CURRENCY_RATES[toCurrency as keyof typeof CURRENCY_RATES];
-};
-
 // Share Options Component
 const ShareOptions = ({ queue, onClose }: { queue: Queue; onClose: () => void }) => {
   const generateShareMessage = () => {
     const amountText = queue.amount 
-      ? `Amount: ${formatCurrency(queue.amount, queue.currency)}${queue.currency !== 'USD' ? ` ($${convertCurrency(queue.amount, queue.currency, 'USD').toFixed(2)} USD)` : ''}`
+      ? `Amount: ${formatCurrency(queue.amount, queue.currency)}${queue.currency !== 'USD' ? ` ($${convertCurrencySync(queue.amount, queue.currency, 'USD').toFixed(2)} USD)` : ''}`
       : '';
 
     const branchText = queue.branch_name ? `Branch: ${queue.branch_name}` : '';
@@ -353,7 +416,7 @@ const DashboardSummary = ({
     queue.priority === 'high' && queue.status === 'pending'
   );
   const requiresAttentionQueues = filteredQueues.filter(queue => 
-    queue.amount && convertCurrency(queue.amount, queue.currency, 'USD') > 500 && queue.status === 'pending'
+    queue.amount && convertCurrencySync(queue.amount, queue.currency, 'USD') > 500 && queue.status === 'pending'
   );
 
   if (canManageAllQueues) return null;
@@ -456,11 +519,11 @@ const QueueFormModal = ({
     }));
   };
 
-  const handleCurrencyChange = (newCurrency: string) => {
+  const handleCurrencyChange = async (newCurrency: string) => {
     if (formData.amount && formData.currency) {
       const currentAmount = parseFloat(formData.amount);
       if (!isNaN(currentAmount)) {
-        const convertedAmount = convertCurrency(currentAmount, formData.currency, newCurrency);
+        const convertedAmount = await convertCurrency(currentAmount, formData.currency, newCurrency);
         setFormData({
           ...formData,
           currency: newCurrency,
@@ -608,55 +671,55 @@ const QueueFormModal = ({
 
               {/* Receipt Upload */}
               <div>
-  <label className="block text-xs font-semibold text-slate-700 mb-1.5">
-    Receipt (Optional)
-  </label>
-  <div className={`border-2 border-dashed rounded-lg p-3 transition-all ${
-    formData.receipt 
-      ? 'border-green-300 bg-green-50/50' 
-      : 'border-slate-200 hover:border-blue-300 hover:bg-blue-50/50'
-  }`}>
-    <input
-      type="file"
-      id="receipt-upload"
-      onChange={(e) => handleFileChange(e, 'receipt')}
-      className="hidden"
-      accept={Object.keys(ACCEPTED_FILE_TYPES).join(',')}
-    />
-    <label htmlFor="receipt-upload" className="cursor-pointer block">
-      <div className="flex items-center gap-2">
-        {formData.receipt ? (
-          <>
-            <FileText className="w-3.5 h-3.5 text-green-500 flex-shrink-0" />
-            <div className="flex-1 min-w-0">
-              <p className="text-xs text-slate-600 font-medium truncate">
-                {formData.receipt.name}
-              </p>
-            </div>
-            <button
-              type="button"
-              onClick={(e) => {
-                e.stopPropagation();
-                handleInputChange('receipt', null);
-              }}
-              className="text-red-500 hover:text-red-700 text-xs font-medium flex-shrink-0"
-            >
-              Remove
-            </button>
-          </>
-        ) : (
-          <>
-            <Upload className="w-3.5 h-3.5 text-slate-400 flex-shrink-0" />
-            <div className="flex-1">
-              <p className="text-xs text-slate-600 font-medium">Upload receipt</p>
-              <p className="text-[10px] text-slate-400">JPG, PNG, PDF, DOC (Max 5MB)</p>
-            </div>
-          </>
-        )}
-      </div>
-    </label>
-  </div>
-</div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1.5">
+                  Receipt (Optional)
+                </label>
+                <div className={`border-2 border-dashed rounded-lg p-3 transition-all ${
+                  formData.receipt 
+                    ? 'border-green-300 bg-green-50/50' 
+                    : 'border-slate-200 hover:border-blue-300 hover:bg-blue-50/50'
+                }`}>
+                  <input
+                    type="file"
+                    id="receipt-upload"
+                    onChange={(e) => handleFileChange(e, 'receipt')}
+                    className="hidden"
+                    accept={Object.keys(ACCEPTED_FILE_TYPES).join(',')}
+                  />
+                  <label htmlFor="receipt-upload" className="cursor-pointer block">
+                    <div className="flex items-center gap-2">
+                      {formData.receipt ? (
+                        <>
+                          <FileText className="w-3.5 h-3.5 text-green-500 flex-shrink-0" />
+                          <div className="flex-1 min-w-0">
+                            <p className="text-xs text-slate-600 font-medium truncate">
+                              {formData.receipt.name}
+                            </p>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleInputChange('receipt', null);
+                            }}
+                            className="text-red-500 hover:text-red-700 text-xs font-medium flex-shrink-0"
+                          >
+                            Remove
+                          </button>
+                        </>
+                      ) : (
+                        <>
+                          <Upload className="w-3.5 h-3.5 text-slate-400 flex-shrink-0" />
+                          <div className="flex-1">
+                            <p className="text-xs text-slate-600 font-medium">Upload receipt</p>
+                            <p className="text-[10px] text-slate-400">JPG, PNG, PDF, DOC (Max 5MB)</p>
+                          </div>
+                        </>
+                      )}
+                    </div>
+                  </label>
+                </div>
+              </div>
             </div>
 
             {/* Right Column - Details */}
@@ -738,56 +801,56 @@ const QueueFormModal = ({
               )}
 
               {/* Invoice Upload */}
-             <div>
-  <label className="block text-xs font-semibold text-slate-700 mb-1.5">
-    Invoice (Optional)
-  </label>
-  <div className={`border-2 border-dashed rounded-lg p-3 transition-all ${
-    formData.invoice 
-      ? 'border-green-300 bg-green-50/50' 
-      : 'border-slate-200 hover:border-blue-300 hover:bg-blue-50/50'
-  }`}>
-    <input
-      type="file"
-      id="invoice-upload"
-      onChange={(e) => handleFileChange(e, 'invoice')}
-      className="hidden"
-      accept={Object.keys(ACCEPTED_FILE_TYPES).join(',')}
-    />
-    <label htmlFor="invoice-upload" className="cursor-pointer block">
-      <div className="flex items-center gap-2">
-        {formData.invoice ? (
-          <>
-            <FileText className="w-3.5 h-3.5 text-green-500 flex-shrink-0" />
-            <div className="flex-1 min-w-0">
-              <p className="text-xs text-slate-600 font-medium truncate">
-                {formData.invoice.name}
-              </p>
-            </div>
-            <button
-              type="button"
-              onClick={(e) => {
-                e.stopPropagation();
-                handleInputChange('invoice', null);
-              }}
-              className="text-red-500 hover:text-red-700 text-xs font-medium flex-shrink-0"
-            >
-              Remove
-            </button>
-          </>
-        ) : (
-          <>
-            <Upload className="w-3.5 h-3.5 text-slate-400 flex-shrink-0" />
-            <div className="flex-1">
-              <p className="text-xs text-slate-600 font-medium">Upload invoice</p>
-              <p className="text-[10px] text-slate-400">JPG, PNG, PDFs, DOC (Max 5MB)</p>
-            </div>
-          </>
-        )}
-      </div>
-    </label>
-  </div>
-</div>
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1.5">
+                  Invoice (Optional)
+                </label>
+                <div className={`border-2 border-dashed rounded-lg p-3 transition-all ${
+                  formData.invoice 
+                    ? 'border-green-300 bg-green-50/50' 
+                    : 'border-slate-200 hover:border-blue-300 hover:bg-blue-50/50'
+                }`}>
+                  <input
+                    type="file"
+                    id="invoice-upload"
+                    onChange={(e) => handleFileChange(e, 'invoice')}
+                    className="hidden"
+                    accept={Object.keys(ACCEPTED_FILE_TYPES).join(',')}
+                  />
+                  <label htmlFor="invoice-upload" className="cursor-pointer block">
+                    <div className="flex items-center gap-2">
+                      {formData.invoice ? (
+                        <>
+                          <FileText className="w-3.5 h-3.5 text-green-500 flex-shrink-0" />
+                          <div className="flex-1 min-w-0">
+                            <p className="text-xs text-slate-600 font-medium truncate">
+                              {formData.invoice.name}
+                            </p>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleInputChange('invoice', null);
+                            }}
+                            className="text-red-500 hover:text-red-700 text-xs font-medium flex-shrink-0"
+                          >
+                            Remove
+                          </button>
+                        </>
+                      ) : (
+                        <>
+                          <Upload className="w-3.5 h-3.5 text-slate-400 flex-shrink-0" />
+                          <div className="flex-1">
+                            <p className="text-xs text-slate-600 font-medium">Upload invoice</p>
+                            <p className="text-[10px] text-slate-400">JPG, PNG, PDFs, DOC (Max 5MB)</p>
+                          </div>
+                        </>
+                      )}
+                    </div>
+                  </label>
+                </div>
+              </div>
             </div>
           </div>
 
@@ -832,7 +895,7 @@ const QueueItem = ({
   queue: Queue;
   user: any;
   userRole: string;
-  onDecision: (queue: Queue, status: 'approved' | 'rejected') => void;
+  onDecision: (queue: Queue, status: 'approved' | 'rejected' | 'amended') => void;
   onDelete: (id: string) => void;
   onEdit: (queue: Queue) => void;
   onShare: (queue: Queue) => void;
@@ -882,7 +945,7 @@ const QueueItem = ({
       if (error) throw error;
       
       setIsEditing(false);
-      onEdit(queue); // Refresh the parent component
+      onEdit(queue);
     } catch (error) {
       console.error('Error updating queue:', error);
       alert('Error updating item. Please try again.');
@@ -1076,7 +1139,7 @@ const QueueItem = ({
                   {formatCurrency(queue.amount, queue.currency)}
                   {queue.currency !== 'USD' && (
                     <span className="text-xs text-slate-500">
-                      (${convertCurrency(queue.amount, queue.currency, 'USD').toFixed(2)})
+                      (${convertCurrencySync(queue.amount, queue.currency, 'USD').toFixed(2)})
                     </span>
                   )}
                 </div>
@@ -1334,12 +1397,14 @@ const QueueItem = ({
             {queue.decisions.map((decision) => (
               <div key={decision.id} className="flex items-start gap-2 p-2 bg-slate-50 rounded-lg">
                 <div className={`w-2 h-2 rounded-full mt-1.5 ${
-                  decision.status === 'approved' ? 'bg-green-500' : 'bg-red-500'
+                  decision.status === 'approved' ? 'bg-green-500' : 
+                  decision.status === 'rejected' ? 'bg-red-500' : 'bg-amber-500'
                 }`} />
                 <div className="flex-1">
                   <div className="flex justify-between items-center">
                     <span className={`text-xs font-semibold ${
-                      decision.status === 'approved' ? 'text-green-700' : 'text-red-700'
+                      decision.status === 'approved' ? 'text-green-700' : 
+                      decision.status === 'rejected' ? 'text-red-700' : 'text-amber-700'
                     }`}>
                       {decision.status}
                     </span>
@@ -1362,7 +1427,7 @@ const QueueItem = ({
 
       {/* Status buttons and date */}
       <div className="mt-auto pt-3 border-t border-slate-100">
-        {/* Approval/Rejection buttons for admin/operations */}
+        {/* Approval/Rejection/Amend buttons for admin/operations */}
         {canApproveReject(userRole) && queue.status === 'pending' && activeViewTab === 'details' && (
           <div className="flex gap-2 mb-3">
             <button
@@ -1375,13 +1440,23 @@ const QueueItem = ({
               }`}
               title={
                 queue.amount && !canApproveExpense(queue.amount, queue.currency, userRole)
-                  ? `Only admin can approve expenses above $500 USD equivalent. This amount (${formatCurrency(queue.amount, queue.currency)} = $${convertCurrency(queue.amount, queue.currency, 'USD').toFixed(2)} USD) exceeds the operations approval limit.`
+                  ? `Only admin can approve expenses above $500 USD equivalent. This amount (${formatCurrency(queue.amount, queue.currency)} = $${convertCurrencySync(queue.amount, queue.currency, 'USD').toFixed(2)} USD) exceeds the operations approval limit.`
                   : 'Approve'
               }
             >
               <Check className="w-3 h-3" />
               Approve
             </button>
+            
+            {/* Amend Button */}
+            <button
+              onClick={() => onDecision(queue, 'amended')}
+              className="flex-1 flex items-center justify-center gap-1 py-2 rounded-lg text-xs font-semibold bg-amber-500 hover:bg-amber-600 text-white transition-all hover:scale-105"
+            >
+              <Edit2 className="w-3 h-3" />
+              Amend
+            </button>
+            
             <button
               onClick={() => onDecision(queue, 'rejected')}
               className="flex-1 flex items-center justify-center gap-1 py-2 rounded-lg text-xs font-semibold bg-red-500 hover:bg-red-600 text-white transition-all hover:scale-105"
@@ -1453,11 +1528,13 @@ export function QueueList() {
         return queuesToFilter.filter(queue => queue.status === 'approved');
       case 'rejected':
         return queuesToFilter.filter(queue => queue.status === 'rejected');
+      case 'amended':
+        return queuesToFilter.filter(queue => queue.status === 'amended');
       case 'my-items':
         return queuesToFilter.filter(queue => queue.user_id === user?.id);
       case 'requires-attention':
         return queuesToFilter.filter(queue => 
-          (queue.amount && convertCurrency(queue.amount, queue.currency, 'USD') > 500 && queue.status === 'pending') || 
+          (queue.amount && convertCurrencySync(queue.amount, queue.currency, 'USD') > 500 && queue.status === 'pending') || 
           queue.priority === 'high'
         );
       default:
@@ -1756,7 +1833,7 @@ export function QueueList() {
     let amountInUSD = amount;
     
     if (currency !== 'USD') {
-      amountInUSD = convertCurrency(amount, currency, 'USD');
+      amountInUSD = convertCurrencySync(amount, currency, 'USD');
     }
     
     console.log(`Approval check: ${amount} ${currency} = ${amountInUSD} USD, Role: ${role}`);
@@ -1779,14 +1856,14 @@ export function QueueList() {
   };
 
   // Queue actions
-  const handleDecision = async (status: 'approved' | 'rejected') => {
+  const handleDecision = async (status: 'approved' | 'rejected' | 'amended') => {
     if (!selectedQueue || !user) return;
 
     try {
       const { error: queueError } = await supabase
         .from('queues')
         .update({ 
-          status, 
+          status: status === 'amended' ? 'pending' : status, // Keep as pending if amended
           updated_at: new Date().toISOString() 
         })
         .eq('id', selectedQueue.id);
@@ -1821,9 +1898,9 @@ export function QueueList() {
     }
   };
 
-  const openDecisionModal = (queue: Queue, status: 'approved' | 'rejected') => {
+  const openDecisionModal = (queue: Queue, status: 'approved' | 'rejected' | 'amended') => {
     if (status === 'approved' && queue.amount && !canApproveExpense(queue.amount, queue.currency, userRole)) {
-      const amountInUSD = convertCurrency(queue.amount, queue.currency, 'USD');
+      const amountInUSD = convertCurrencySync(queue.amount, queue.currency, 'USD');
       alert(`Only admin can approve expenses above $500 USD equivalent. This amount (${formatCurrency(queue.amount, queue.currency)} = $${amountInUSD.toFixed(2)} USD) exceeds the operations approval limit.`);
       return;
     }
@@ -2125,9 +2202,10 @@ export function QueueList() {
         { id: 'pending', label: 'Pending', count: queues.filter(q => q.status === 'pending').length },
         { id: 'approved', label: 'Approved', count: queues.filter(q => q.status === 'approved').length },
         { id: 'rejected', label: 'Rejected', count: queues.filter(q => q.status === 'rejected').length },
+        { id: 'amended', label: 'Amended', count: queues.filter(q => q.status === 'amended').length },
         { id: 'my-items', label: 'My Items', count: queues.filter(q => q.user_id === user?.id).length },
         { id: 'requires-attention', label: 'Requires Attention', count: queues.filter(q => 
-          (q.amount && convertCurrency(q.amount, q.currency, 'USD') > 500 && q.status === 'pending') || q.priority === 'high'
+          (q.amount && convertCurrencySync(q.amount, q.currency, 'USD') > 500 && q.status === 'pending') || q.priority === 'high'
         ).length },
       ].map((tab) => (
         <button
@@ -2569,7 +2647,8 @@ export function QueueList() {
           <div className="bg-white rounded-2xl shadow-xl w-full max-w-md">
             <div className="flex justify-between items-center p-6 border-b border-slate-200">
               <h3 className="text-xl font-semibold text-slate-900">
-                {selectedQueue.status === 'approved' ? 'Approve' : 'Reject'} Item
+                {selectedQueue.status === 'approved' ? 'Approve' : 
+                 selectedQueue.status === 'rejected' ? 'Reject' : 'Amend'} Item
               </h3>
               <button 
                 onClick={() => setShowDecisionModal(false)}
@@ -2587,7 +2666,7 @@ export function QueueList() {
                     Amount: {formatCurrency(selectedQueue.amount, selectedQueue.currency)}
                     {selectedQueue.currency !== 'USD' && (
                       <span className="text-xs text-slate-500 ml-1">
-                        (${convertCurrency(selectedQueue.amount, selectedQueue.currency, 'USD').toFixed(2)} USD)
+                        (${convertCurrencySync(selectedQueue.amount, selectedQueue.currency, 'USD').toFixed(2)} USD)
                       </span>
                     )}
                     {selectedQueue.amount && !canApproveExpense(selectedQueue.amount, selectedQueue.currency, userRole) && (
@@ -2600,24 +2679,31 @@ export function QueueList() {
 
               <div className="mb-4">
                 <label className="block text-sm font-semibold text-slate-700 mb-2">
-                  Comment (Optional)
+                  Comment {selectedQueue.status === 'amended' ? '(Required - explain what needs to be amended)' : '(Optional)'}
                 </label>
                 <textarea
                   value={decisionComment}
                   onChange={(e) => setDecisionComment(e.target.value)}
                   className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all resize-none placeholder:text-slate-400 text-sm"
                   rows={3}
-                  placeholder="Add a comment for your decision..."
+                  placeholder={selectedQueue.status === 'amended' 
+                    ? "Explain what needs to be changed or corrected..." 
+                    : "Add a comment for your decision..."
+                  }
+                  required={selectedQueue.status === 'amended'}
                 />
               </div>
 
               <div className="flex gap-3">
                 <button
-                  onClick={() => handleDecision(selectedQueue.status as 'approved' | 'rejected')}
+                  onClick={() => handleDecision(selectedQueue.status as 'approved' | 'rejected' | 'amended')}
+                  disabled={selectedQueue.status === 'amended' && !decisionComment.trim()}
                   className={`flex-1 py-3 rounded-xl font-semibold transition-all text-sm ${
                     selectedQueue.status === 'approved'
-                      ? 'bg-green-500 hover:bg-green-600 text-white'
-                      : 'bg-red-500 hover:bg-red-600 text-white'
+                      ? 'bg-green-500 hover:bg-green-600 text-white disabled:bg-green-300'
+                      : selectedQueue.status === 'rejected'
+                      ? 'bg-red-500 hover:bg-red-600 text-white disabled:bg-red-300'
+                      : 'bg-amber-500 hover:bg-amber-600 text-white disabled:bg-amber-300'
                   }`}
                 >
                   Confirm {selectedQueue.status}
