@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
-import { Plus, HandCoins, Tag, AlertCircle, Clock, Trash2, X, Building, Globe, ChevronDown, Upload, FileText, Image, Download, Check, X as XIcon, MessageSquare, User, Shield, Calendar, Filter, Plane, RadioTower, Edit2, Save, ChevronLeft, ChevronRight } from 'lucide-react';
+import { Plus, HandCoins, Tag, AlertCircle, Clock, Trash2, X, Building, Globe, ChevronDown, Upload, FileText, Image, Download, Check, X as XIcon, MessageSquare, User, Shield, Calendar, Filter, Plane, RadioTower, Edit2, Save, ChevronLeft, ChevronRight, Share2, Mail, MessageCircle, Receipt, FileDigit } from 'lucide-react';
 import ReactCountryFlag from 'react-country-flag';
 
 // Constants-driven architecture
@@ -18,7 +18,8 @@ const QUEUE_CONSTANTS = {
     { name: 'Other', code: 'XX' }
   ] as const,
   itemsPerPage: 6,
-  tabs: ['all', 'pending', 'approved', 'rejected', 'my-items', 'requires-attention'] as const
+  tabs: ['all', 'pending', 'approved', 'rejected', 'my-items', 'requires-attention'] as const,
+  viewTabs: ['details', 'receipts'] as const
 } as const;
 
 // Date filter options
@@ -145,6 +146,93 @@ const convertCurrency = (amount: number, fromCurrency: string, toCurrency: strin
   
   const amountInUSD = amount / CURRENCY_RATES[fromCurrency as keyof typeof CURRENCY_RATES];
   return amountInUSD * CURRENCY_RATES[toCurrency as keyof typeof CURRENCY_RATES];
+};
+
+// Share Options Component
+const ShareOptions = ({ queue, onClose }: { queue: Queue; onClose: () => void }) => {
+  const generateShareMessage = () => {
+    const amountText = queue.amount 
+      ? `Amount: ${formatCurrency(queue.amount, queue.currency)}${queue.currency !== 'USD' ? ` ($${convertCurrency(queue.amount, queue.currency, 'USD').toFixed(2)} USD)` : ''}`
+      : '';
+
+    const branchText = queue.branch_name ? `Branch: ${queue.branch_name}` : '';
+    const countryText = queue.country && queue.country !== 'ALL' && queue.country !== 'XX' 
+      ? `Country: ${getCountryName(queue.country)}` 
+      : '';
+
+    return `Queue Item: ${queue.title}
+
+${queue.description ? `Description: ${queue.description}` : ''}
+${amountText}
+Category: ${queue.category}
+Priority: ${queue.priority}
+Status: ${queue.status}
+${branchText}
+${countryText}
+
+Created: ${new Date(queue.created_at).toLocaleDateString()}`.trim();
+  };
+
+  const shareViaWhatsApp = () => {
+    const message = generateShareMessage();
+    const encodedMessage = encodeURIComponent(message);
+    const whatsappUrl = `https://wa.me/?text=${encodedMessage}`;
+    window.open(whatsappUrl, '_blank');
+    onClose();
+  };
+
+  const shareViaEmail = () => {
+    const message = generateShareMessage();
+    const subject = `Queue Item: ${queue.title}`;
+    const encodedSubject = encodeURIComponent(subject);
+    const encodedBody = encodeURIComponent(message);
+    const mailtoUrl = `mailto:?subject=${encodedSubject}&body=${encodedBody}`;
+    window.location.href = mailtoUrl;
+    onClose();
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+      <div className="bg-white rounded-2xl shadow-xl w-full max-w-sm">
+        <div className="flex justify-between items-center p-6 border-b border-slate-200">
+          <h3 className="text-lg font-semibold text-slate-900">Share Queue Item</h3>
+          <button 
+            onClick={onClose}
+            className="text-slate-400 hover:text-slate-600 transition-colors p-1 rounded-lg"
+          >
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+        
+        <div className="p-6">
+          <div className="space-y-3">
+            <button
+              onClick={shareViaWhatsApp}
+              className="w-full flex items-center justify-center gap-2 bg-green-500 hover:bg-green-600 text-white py-2.5 rounded-xl font-base transition-all text-xs"
+            >
+              <MessageCircle className="w-3 h-3" />
+              Share via WhatsApp
+            </button>
+            
+            <button
+              onClick={shareViaEmail}
+              className="w-full flex items-center justify-center gap-2 bg-blue-500 hover:bg-blue-600 text-white py-2.5 rounded-xl font-base transition-all text-xs"
+            >
+              <Mail className="w-3 h-3" />
+              Share via Email
+            </button>
+          </div>
+          
+          <button
+            onClick={onClose}
+            className="w-full mt-4 bg-slate-100 hover:bg-slate-200 text-slate-700 py-3 rounded-xl font-semibold transition-all text-sm"
+          >
+            Cancel
+          </button>
+        </div>
+      </div>
+    </div>
+  );
 };
 
 // Form Components
@@ -520,50 +608,55 @@ const QueueFormModal = ({
 
               {/* Receipt Upload */}
               <div>
-                <label className="block text-xs font-semibold text-slate-700 mb-2">
-                  Receipt (Optional)
-                </label>
-                <div className={`border-2 border-dashed rounded-xl p-4 transition-all ${
-                  formData.receipt 
-                    ? 'border-green-300 bg-green-50/50' 
-                    : 'border-slate-200 hover:border-blue-300 hover:bg-blue-50/50'
-                }`}>
-                  <input
-                    type="file"
-                    id="receipt-upload"
-                    onChange={(e) => handleFileChange(e, 'receipt')}
-                    className="hidden"
-                    accept={Object.keys(ACCEPTED_FILE_TYPES).join(',')}
-                  />
-                  <label htmlFor="receipt-upload" className="cursor-pointer block">
-                    <div className="text-center">
-                      {formData.receipt ? (
-                        <FileText className="w-4 h-4 text-green-500 mx-auto mb-2" />
-                      ) : (
-                        <Upload className="w-4 h-4 text-slate-400 mx-auto mb-2" />
-                      )}
-                      <p className="text-xs text-slate-600 font-medium mb-1">
-                        {formData.receipt ? formData.receipt.name : 'Click to upload receipt'}
-                      </p>
-                      <p className="text-xs text-slate-400">
-                        Supports: JPG, PNG, PDF, DOC (Max 5MB)
-                      </p>
-                      {formData.receipt && (
-                        <button
-                          type="button"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            handleInputChange('receipt', null);
-                          }}
-                          className="mt-2 text-red-500 hover:text-red-700 text-xs font-medium"
-                        >
-                          Remove file
-                        </button>
-                      )}
-                    </div>
-                  </label>
-                </div>
-              </div>
+  <label className="block text-xs font-semibold text-slate-700 mb-1.5">
+    Receipt (Optional)
+  </label>
+  <div className={`border-2 border-dashed rounded-lg p-3 transition-all ${
+    formData.receipt 
+      ? 'border-green-300 bg-green-50/50' 
+      : 'border-slate-200 hover:border-blue-300 hover:bg-blue-50/50'
+  }`}>
+    <input
+      type="file"
+      id="receipt-upload"
+      onChange={(e) => handleFileChange(e, 'receipt')}
+      className="hidden"
+      accept={Object.keys(ACCEPTED_FILE_TYPES).join(',')}
+    />
+    <label htmlFor="receipt-upload" className="cursor-pointer block">
+      <div className="flex items-center gap-2">
+        {formData.receipt ? (
+          <>
+            <FileText className="w-3.5 h-3.5 text-green-500 flex-shrink-0" />
+            <div className="flex-1 min-w-0">
+              <p className="text-xs text-slate-600 font-medium truncate">
+                {formData.receipt.name}
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                handleInputChange('receipt', null);
+              }}
+              className="text-red-500 hover:text-red-700 text-xs font-medium flex-shrink-0"
+            >
+              Remove
+            </button>
+          </>
+        ) : (
+          <>
+            <Upload className="w-3.5 h-3.5 text-slate-400 flex-shrink-0" />
+            <div className="flex-1">
+              <p className="text-xs text-slate-600 font-medium">Upload receipt</p>
+              <p className="text-[10px] text-slate-400">JPG, PNG, PDF, DOC (Max 5MB)</p>
+            </div>
+          </>
+        )}
+      </div>
+    </label>
+  </div>
+</div>
             </div>
 
             {/* Right Column - Details */}
@@ -645,51 +738,56 @@ const QueueFormModal = ({
               )}
 
               {/* Invoice Upload */}
-              <div>
-                <label className="block text-xs font-semibold text-slate-700 mb-2">
-                  Invoice (Optional)
-                </label>
-                <div className={`border-2 border-dashed rounded-xl p-4 transition-all ${
-                  formData.invoice 
-                    ? 'border-green-300 bg-green-50/50' 
-                    : 'border-slate-200 hover:border-blue-300 hover:bg-blue-50/50'
-                }`}>
-                  <input
-                    type="file"
-                    id="invoice-upload"
-                    onChange={(e) => handleFileChange(e, 'invoice')}
-                    className="hidden"
-                    accept={Object.keys(ACCEPTED_FILE_TYPES).join(',')}
-                  />
-                  <label htmlFor="invoice-upload" className="cursor-pointer block">
-                    <div className="text-center">
-                      {formData.invoice ? (
-                        <FileText className="w-4 h-4 text-green-500 mx-auto mb-2" />
-                      ) : (
-                        <Upload className="w-4 h-4 text-slate-400 mx-auto mb-2" />
-                      )}
-                      <p className="text-xs text-slate-600 font-medium mb-1">
-                        {formData.invoice ? formData.invoice.name : 'Click to upload invoice'}
-                      </p>
-                      <p className="text-xs text-slate-400">
-                        Supports: JPG, PNG, PDF, DOC (Max 5MB)
-                      </p>
-                      {formData.invoice && (
-                        <button
-                          type="button"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            handleInputChange('invoice', null);
-                          }}
-                          className="mt-2 text-red-500 hover:text-red-700 text-xs font-medium"
-                        >
-                          Remove file
-                        </button>
-                      )}
-                    </div>
-                  </label>
-                </div>
-              </div>
+             <div>
+  <label className="block text-xs font-semibold text-slate-700 mb-1.5">
+    Invoice (Optional)
+  </label>
+  <div className={`border-2 border-dashed rounded-lg p-3 transition-all ${
+    formData.invoice 
+      ? 'border-green-300 bg-green-50/50' 
+      : 'border-slate-200 hover:border-blue-300 hover:bg-blue-50/50'
+  }`}>
+    <input
+      type="file"
+      id="invoice-upload"
+      onChange={(e) => handleFileChange(e, 'invoice')}
+      className="hidden"
+      accept={Object.keys(ACCEPTED_FILE_TYPES).join(',')}
+    />
+    <label htmlFor="invoice-upload" className="cursor-pointer block">
+      <div className="flex items-center gap-2">
+        {formData.invoice ? (
+          <>
+            <FileText className="w-3.5 h-3.5 text-green-500 flex-shrink-0" />
+            <div className="flex-1 min-w-0">
+              <p className="text-xs text-slate-600 font-medium truncate">
+                {formData.invoice.name}
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                handleInputChange('invoice', null);
+              }}
+              className="text-red-500 hover:text-red-700 text-xs font-medium flex-shrink-0"
+            >
+              Remove
+            </button>
+          </>
+        ) : (
+          <>
+            <Upload className="w-3.5 h-3.5 text-slate-400 flex-shrink-0" />
+            <div className="flex-1">
+              <p className="text-xs text-slate-600 font-medium">Upload invoice</p>
+              <p className="text-[10px] text-slate-400">JPG, PNG, PDF, DOC (Max 5MB)</p>
+            </div>
+          </>
+        )}
+      </div>
+    </label>
+  </div>
+</div>
             </div>
           </div>
 
@@ -716,6 +814,598 @@ const QueueFormModal = ({
   );
 };
 
+// Enhanced Queue Item Component with Tabs
+const QueueItem = ({ 
+  queue, 
+  user, 
+  userRole, 
+  onDecision, 
+  onDelete, 
+  onEdit, 
+  onShare, 
+  onFileUpload, 
+  onFileDelete,
+  canManageAllQueues,
+  canApproveReject,
+  canApproveExpense 
+}: { 
+  queue: Queue;
+  user: any;
+  userRole: string;
+  onDecision: (queue: Queue, status: 'approved' | 'rejected') => void;
+  onDelete: (id: string) => void;
+  onEdit: (queue: Queue) => void;
+  onShare: (queue: Queue) => void;
+  onFileUpload: (file: File, queueId: string, field: 'receipt' | 'invoice') => void;
+  onFileDelete: (queueId: string, field: 'receipt' | 'invoice') => void;
+  canManageAllQueues: boolean;
+  canApproveReject: (role?: string) => boolean;
+  canApproveExpense: (amount: number | null, currency: string, role?: string) => boolean;
+}) => {
+  const [activeViewTab, setActiveViewTab] = useState<(typeof QUEUE_CONSTANTS.viewTabs)[number]>('details');
+  const [isEditing, setIsEditing] = useState(false);
+  const [editFormData, setEditFormData] = useState({
+    title: queue.title,
+    description: queue.description || '',
+    amount: queue.amount?.toString() || '',
+    category: queue.category,
+    priority: queue.priority,
+    branchName: queue.branch_name || '',
+    country: queue.country || '',
+    currency: queue.currency
+  });
+
+  const handleEditInputChange = (field: string, value: string) => {
+    setEditFormData(prev => ({
+      ...prev,
+      [field]: value
+    }));
+  };
+
+  const handleSaveEdit = async () => {
+    try {
+      const { error } = await supabase
+        .from('queues')
+        .update({
+          title: editFormData.title.trim(),
+          description: editFormData.description.trim() || null,
+          amount: editFormData.amount ? parseFloat(editFormData.amount) : null,
+          category: editFormData.category,
+          priority: editFormData.priority,
+          branch_name: editFormData.branchName.trim() || null,
+          country: editFormData.country || null,
+          currency: editFormData.currency,
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', queue.id);
+
+      if (error) throw error;
+      
+      setIsEditing(false);
+      onEdit(queue); // Refresh the parent component
+    } catch (error) {
+      console.error('Error updating queue:', error);
+      alert('Error updating item. Please try again.');
+    }
+  };
+
+  const handleCancelEdit = () => {
+    setEditFormData({
+      title: queue.title,
+      description: queue.description || '',
+      amount: queue.amount?.toString() || '',
+      category: queue.category,
+      priority: queue.priority,
+      branchName: queue.branch_name || '',
+      country: queue.country || '',
+      currency: queue.currency
+    });
+    setIsEditing(false);
+  };
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>, field: 'receipt' | 'invoice') => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const fileExtension = '.' + file.name.split('.').pop()?.toLowerCase();
+    const isValidType = Object.values(ACCEPTED_FILE_TYPES)
+      .flat()
+      .includes(fileExtension);
+
+    if (!isValidType) {
+      alert('Please select a valid file type (images, PDF, or Word documents)');
+      return;
+    }
+
+    if (file.size > 5 * 1024 * 1024) {
+      alert('File size must be less than 5MB');
+      return;
+    }
+
+    onFileUpload(file, queue.id, field);
+  };
+
+  const renderCountryFlag = (countryCode: string, size: string = '1em') => {
+    if (!countryCode || countryCode === 'ALL' || countryCode === 'XX') {
+      return <Globe className="w-3 h-3" />;
+    }
+    
+    try {
+      return (
+        <ReactCountryFlag
+          countryCode={countryCode}
+          svg
+          style={{
+            width: size,
+            height: size,
+          }}
+          title={getCountryName(countryCode)}
+        />
+      );
+    } catch (error) {
+      return <Globe className="w-3 h-3" />;
+    }
+  };
+
+  return (
+    <div className="group bg-white/70 backdrop-blur-xl rounded-2xl shadow-md hover:shadow-xl p-5 border border-slate-200/60 transition-all duration-300 hover:scale-[1.02] flex flex-col h-full">
+      {/* Header with title and actions */}
+      <div className="flex justify-between items-start mb-3">
+        {isEditing ? (
+          <input
+            type="text"
+            value={editFormData.title}
+            onChange={(e) => handleEditInputChange('title', e.target.value)}
+            className="flex-1 text-sm font-semibold text-slate-900 bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
+            autoFocus
+          />
+        ) : (
+          <h3 className="text-sm font-semibold text-slate-900 leading-tight flex-1 pr-2 line-clamp-2">
+            {queue.title}
+          </h3>
+        )}
+        <div className="flex items-center gap-1 flex-shrink-0">
+          {/* Share Button */}
+          <button
+            onClick={() => onShare(queue)}
+            className="text-slate-400 hover:text-blue-500 transition-all p-1.5 rounded-lg hover:bg-blue-50"
+            title="Share"
+          >
+            <Share2 className="w-3.5 h-3.5" />
+          </button>
+          
+          {queue.user_id === user?.id && !isEditing && (
+            <button
+              onClick={() => setIsEditing(true)}
+              className="text-slate-400 hover:text-blue-500 transition-all p-1.5 rounded-lg hover:bg-blue-50"
+              title="Edit"
+            >
+              <Edit2 className="w-3.5 h-3.5" />
+            </button>
+          )}
+          {queue.user_id === user?.id && (
+            <button
+              onClick={() => onDelete(queue.id)}
+              className="text-slate-400 hover:text-red-500 transition-all p-1.5 rounded-lg hover:bg-red-50"
+              title="Delete"
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* Show creator email for admin/operations */}
+      {canManageAllQueues && queue.user_email && (
+        <p className="text-xs text-slate-500 mb-2">By: {queue.user_email}</p>
+      )}
+
+      {/* View Tabs */}
+      <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-xl mb-4">
+        {QUEUE_CONSTANTS.viewTabs.map((tab) => (
+          <button
+            key={tab}
+            onClick={() => setActiveViewTab(tab)}
+            className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
+              activeViewTab === tab
+                ? 'bg-white text-slate-900 shadow-sm'
+                : 'text-slate-600 hover:text-slate-900'
+            }`}
+          >
+            {tab === 'details' ? (
+              <>
+                <FileText className="w-3 h-3" />
+                Details
+              </>
+            ) : (
+              <>
+                <Receipt className="w-3 h-3" />
+                Receipts & Invoices
+              </>
+            )}
+          </button>
+        ))}
+      </div>
+
+      {/* Details Tab Content */}
+      {activeViewTab === 'details' && (
+        <div className="space-y-4 flex-1">
+          {/* Description */}
+          {isEditing ? (
+            <div>
+              <label className="block text-xs font-semibold text-slate-700 mb-2">Description</label>
+              <textarea
+                value={editFormData.description}
+                onChange={(e) => handleEditInputChange('description', e.target.value)}
+                className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent text-xs resize-none"
+                rows={3}
+                placeholder="Add a description..."
+              />
+            </div>
+          ) : (
+            queue.description && (
+              <p className="text-slate-600 text-xs leading-relaxed line-clamp-3">
+                {queue.description}
+              </p>
+            )
+          )}
+
+          {/* Editable Fields */}
+          <div className="grid grid-cols-2 gap-3">
+            {/* Amount */}
+            {isEditing ? (
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-2">Amount</label>
+                <div className="relative">
+                  <HandCoins className="absolute left-2 top-1/2 -translate-y-1/2 w-3 h-3 text-slate-400" />
+                  <input
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    value={editFormData.amount}
+                    onChange={(e) => handleEditInputChange('amount', e.target.value)}
+                    className="w-full pl-7 pr-2 py-2 bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent text-xs"
+                    placeholder="0.00"
+                  />
+                </div>
+              </div>
+            ) : (
+              queue.amount && (
+                <div className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-gradient-to-r from-emerald-50 to-emerald-100/80 text-emerald-700 text-xs font-semibold border border-emerald-200/60">
+                  <HandCoins className="w-3 h-3" />
+                  {formatCurrency(queue.amount, queue.currency)}
+                  {queue.currency !== 'USD' && (
+                    <span className="text-xs text-slate-500">
+                      (${convertCurrency(queue.amount, queue.currency, 'USD').toFixed(2)})
+                    </span>
+                  )}
+                </div>
+              )
+            )}
+
+            {/* Currency */}
+            {isEditing && (
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-2">Currency</label>
+                <select
+                  value={editFormData.currency}
+                  onChange={(e) => handleEditInputChange('currency', e.target.value)}
+                  className="w-full px-2 py-2 bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent text-xs"
+                >
+                  {QUEUE_CONSTANTS.currencies.map(currency => (
+                    <option key={currency} value={currency}>{currency}</option>
+                  ))}
+                </select>
+              </div>
+            )}
+          </div>
+
+          {/* Category and Priority */}
+          <div className="grid grid-cols-2 gap-3">
+            {isEditing ? (
+              <>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-2">Category</label>
+                  <select
+                    value={editFormData.category}
+                    onChange={(e) => handleEditInputChange('category', e.target.value)}
+                    className="w-full px-2 py-2 bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent text-xs"
+                  >
+                    {QUEUE_CONSTANTS.categories.map(category => (
+                      <option key={category} value={category}>
+                        {category.charAt(0).toUpperCase() + category.slice(1)}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-2">Priority</label>
+                  <select
+                    value={editFormData.priority}
+                    onChange={(e) => handleEditInputChange('priority', e.target.value)}
+                    className="w-full px-2 py-2 bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent text-xs"
+                  >
+                    {QUEUE_CONSTANTS.priorities.map(priority => (
+                      <option key={priority} value={priority}>
+                        {priority.charAt(0).toUpperCase() + priority.slice(1)}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </>
+            ) : (
+              <>
+                <span className={`inline-flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-semibold border ${getPriorityColor(queue.priority)}`}>
+                  <AlertCircle className="w-3 h-3" />
+                  {queue.priority}
+                </span>
+                <span className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-slate-50 text-slate-700 text-xs font-semibold border border-slate-200">
+                  <Tag className="w-3 h-3" />
+                  {queue.category}
+                </span>
+              </>
+            )}
+          </div>
+
+          {/* Branch and Country */}
+          <div className="grid grid-cols-2 gap-3">
+            {isEditing ? (
+              <>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-2">Branch</label>
+                  <select
+                    value={editFormData.branchName}
+                    onChange={(e) => handleEditInputChange('branchName', e.target.value)}
+                    className="w-full px-2 py-2 bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent text-xs"
+                  >
+                    {QUEUE_CONSTANTS.branches.map(branch => (
+                      <option key={branch} value={branch}>{branch}</option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-2">Country</label>
+                  <select
+                    value={editFormData.country}
+                    onChange={(e) => handleEditInputChange('country', e.target.value)}
+                    className="w-full px-2 py-2 bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent text-xs"
+                  >
+                    {QUEUE_CONSTANTS.countries.map(country => (
+                      <option key={country.code} value={country.code}>{country.name}</option>
+                    ))}
+                  </select>
+                </div>
+              </>
+            ) : (
+              <>
+                {queue.branch_name && (
+                  <span className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-blue-50 text-blue-700 text-xs font-semibold border border-blue-200">
+                    <Building className="w-3 h-3" />
+                    {queue.branch_name}
+                  </span>
+                )}
+                {queue.country && queue.country !== 'XX' && queue.country !== 'ALL' && (
+                  <span className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-purple-50 text-purple-700 text-xs font-semibold border border-purple-200">
+                    {renderCountryFlag(queue.country)}
+                    {getCountryName(queue.country)}
+                  </span>
+                )}
+              </>
+            )}
+          </div>
+
+          {/* Edit Actions */}
+          {isEditing && (
+            <div className="flex gap-2 pt-2">
+              <button
+                onClick={handleSaveEdit}
+                className="flex-1 bg-green-500 hover:bg-green-600 text-white py-2 rounded-lg font-semibold transition-all text-xs flex items-center justify-center gap-1"
+              >
+                <Save className="w-3 h-3" />
+                Save
+              </button>
+              <button
+                onClick={handleCancelEdit}
+                className="flex-1 bg-slate-100 hover:bg-slate-200 text-slate-700 py-2 rounded-lg font-semibold transition-all text-xs"
+              >
+                Cancel
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Receipts & Invoices Tab Content */}
+      {activeViewTab === 'receipts' && (
+        <div className="space-y-4 flex-1">
+          {/* Receipt Section */}
+          <div>
+            <h4 className="text-xs font-semibold text-slate-700 mb-2 flex items-center gap-1">
+              <Receipt className="w-3 h-3" />
+              Receipt
+            </h4>
+            {queue.receipt_url ? (
+              <div className="flex items-center justify-between p-2 bg-green-50 border border-green-200 rounded-lg">
+                <div className="flex items-center gap-2">
+                  {getFileIcon(queue.receipt_name || '')}
+                  <span className="text-xs font-medium text-green-700 truncate flex-1">
+                    {queue.receipt_name}
+                  </span>
+                </div>
+                <div className="flex items-center gap-1">
+                  <a
+                    href={queue.receipt_url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="p-1 text-green-600 hover:text-green-800 transition-colors"
+                    title="Download receipt"
+                  >
+                    <Download className="w-3 h-3" />
+                  </a>
+                  <button
+                    onClick={() => onFileDelete(queue.id, 'receipt')}
+                    className="p-1 text-red-500 hover:text-red-700 transition-colors"
+                    title="Remove receipt"
+                  >
+                    <Trash2 className="w-3 h-3" />
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div className="relative">
+                <input
+                  type="file"
+                  id={`receipt-${queue.id}`}
+                  onChange={(e) => handleFileChange(e, 'receipt')}
+                  className="hidden"
+                  accept={Object.keys(ACCEPTED_FILE_TYPES).join(',')}
+                />
+                <label
+                  htmlFor={`receipt-${queue.id}`}
+                  className="flex items-center gap-2 p-2 border border-dashed border-slate-300 rounded-lg hover:border-blue-400 hover:bg-blue-50/50 transition-all cursor-pointer"
+                >
+                  <Upload className="w-3 h-3 text-slate-400" />
+                  <span className="text-xs text-slate-600 font-medium">Upload receipt</span>
+                </label>
+              </div>
+            )}
+          </div>
+
+          {/* Invoice Section */}
+          <div>
+            <h4 className="text-xs font-semibold text-slate-700 mb-2 flex items-center gap-1">
+              <FileDigit className="w-3 h-3" />
+              Invoice
+            </h4>
+            {queue.invoice_url ? (
+              <div className="flex items-center justify-between p-2 bg-blue-50 border border-blue-200 rounded-lg">
+                <div className="flex items-center gap-2">
+                  {getFileIcon(queue.invoice_name || '')}
+                  <span className="text-xs font-medium text-blue-700 truncate flex-1">
+                    {queue.invoice_name}
+                  </span>
+                </div>
+                <div className="flex items-center gap-1">
+                  <a
+                    href={queue.invoice_url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="p-1 text-blue-600 hover:text-blue-800 transition-colors"
+                    title="Download invoice"
+                  >
+                    <Download className="w-3 h-3" />
+                  </a>
+                  <button
+                    onClick={() => onFileDelete(queue.id, 'invoice')}
+                    className="p-1 text-red-500 hover:text-red-700 transition-colors"
+                    title="Remove invoice"
+                  >
+                    <Trash2 className="w-3 h-3" />
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div className="relative">
+                <input
+                  type="file"
+                  id={`invoice-${queue.id}`}
+                  onChange={(e) => handleFileChange(e, 'invoice')}
+                  className="hidden"
+                  accept={Object.keys(ACCEPTED_FILE_TYPES).join(',')}
+                />
+                <label
+                  htmlFor={`invoice-${queue.id}`}
+                  className="flex items-center gap-2 p-2 border border-dashed border-slate-300 rounded-lg hover:border-blue-400 hover:bg-blue-50/50 transition-all cursor-pointer"
+                >
+                  <Upload className="w-3 h-3 text-slate-400" />
+                  <span className="text-xs text-slate-600 font-medium">Upload invoice</span>
+                </label>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Decision History */}
+      {queue.decisions && queue.decisions.length > 0 && activeViewTab === 'details' && (
+        <div className="mb-3">
+          <div className="text-xs font-semibold text-slate-700 mb-2">Decision History</div>
+          <div className="space-y-2">
+            {queue.decisions.map((decision) => (
+              <div key={decision.id} className="flex items-start gap-2 p-2 bg-slate-50 rounded-lg">
+                <div className={`w-2 h-2 rounded-full mt-1.5 ${
+                  decision.status === 'approved' ? 'bg-green-500' : 'bg-red-500'
+                }`} />
+                <div className="flex-1">
+                  <div className="flex justify-between items-center">
+                    <span className={`text-xs font-semibold ${
+                      decision.status === 'approved' ? 'text-green-700' : 'text-red-700'
+                    }`}>
+                      {decision.status}
+                    </span>
+                    <span className="text-xs text-slate-500">
+                      {new Date(decision.created_at).toLocaleDateString()}
+                    </span>
+                  </div>
+                  {decision.comment && (
+                    <p className="text-xs text-slate-600 mt-1">{decision.comment}</p>
+                  )}
+                  {decision.user_email && (
+                    <p className="text-xs text-slate-400 mt-1">by {decision.user_email}</p>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Status buttons and date */}
+      <div className="mt-auto pt-3 border-t border-slate-100">
+        {/* Approval/Rejection buttons for admin/operations */}
+        {canApproveReject(userRole) && queue.status === 'pending' && activeViewTab === 'details' && (
+          <div className="flex gap-2 mb-3">
+            <button
+              onClick={() => onDecision(queue, 'approved')}
+              disabled={queue.amount && !canApproveExpense(queue.amount, queue.currency, userRole)}
+              className={`flex-1 flex items-center justify-center gap-1 py-2 rounded-lg text-xs font-semibold transition-all ${
+                queue.amount && !canApproveExpense(queue.amount, queue.currency, userRole)
+                  ? 'bg-slate-100 text-slate-400 cursor-not-allowed'
+                  : 'bg-green-500 hover:bg-green-600 text-white hover:scale-105'
+              }`}
+              title={
+                queue.amount && !canApproveExpense(queue.amount, queue.currency, userRole)
+                  ? `Only admin can approve expenses above $500 USD equivalent. This amount (${formatCurrency(queue.amount, queue.currency)} = $${convertCurrency(queue.amount, queue.currency, 'USD').toFixed(2)} USD) exceeds the operations approval limit.`
+                  : 'Approve'
+              }
+            >
+              <Check className="w-3 h-3" />
+              Approve
+            </button>
+            <button
+              onClick={() => onDecision(queue, 'rejected')}
+              className="flex-1 flex items-center justify-center gap-1 py-2 rounded-lg text-xs font-semibold bg-red-500 hover:bg-red-600 text-white transition-all hover:scale-105"
+            >
+              <XIcon className="w-3 h-3" />
+              Reject
+            </button>
+          </div>
+        )}
+
+        <div className="flex items-center justify-between text-xs text-slate-400">
+          <span className={`px-2 py-1 rounded-md text-xs font-medium ${getStatusColor(queue.status)}`}>
+            {queue.status}
+          </span>
+          <span className="flex items-center gap-1 font-medium">
+            <Clock className="w-3 h-3" />
+            {new Date(queue.created_at).toLocaleDateString()}
+          </span>
+        </div>
+      </div>
+    </div>
+  );
+};
+
 export function QueueList() {
   const { user } = useAuth();
   const [queues, setQueues] = useState<Queue[]>([]);
@@ -729,6 +1419,8 @@ export function QueueList() {
   const [userRole, setUserRole] = useState<string>('user');
   const [roleLoading, setRoleLoading] = useState(true);
   const [editingQueue, setEditingQueue] = useState<Queue | null>(null);
+  const [showShareModal, setShowShareModal] = useState(false);
+  const [queueToShare, setQueueToShare] = useState<Queue | null>(null);
   
   // Enhanced state management
   const [activeTab, setActiveTab] = useState<(typeof QUEUE_CONSTANTS.tabs)[number]>('all');
@@ -746,19 +1438,6 @@ export function QueueList() {
   const [categoryFilter, setCategoryFilter] = useState('');
   const [priorityFilter, setPriorityFilter] = useState('');
   const [amountFilter, setAmountFilter] = useState('');
-
-  const [formData, setFormData] = useState({
-    title: '',
-    description: '',
-    amount: '',
-    category: 'expense',
-    priority: 'medium',
-    branchName: '',
-    country: '',
-    currency: 'USD',
-    receipt: null as File | null,
-    invoice: null as File | null
-  });
 
   // Calculate pagination using constants
   const totalPages = Math.ceil(filteredQueues.length / QUEUE_CONSTANTS.itemsPerPage);
@@ -1093,6 +1772,12 @@ export function QueueList() {
     return false;
   };
 
+  // Share functionality
+  const handleShare = (queue: Queue) => {
+    setQueueToShare(queue);
+    setShowShareModal(true);
+  };
+
   // Queue actions
   const handleDecision = async (status: 'approved' | 'rejected') => {
     if (!selectedQueue || !user) return;
@@ -1232,18 +1917,6 @@ export function QueueList() {
 
       await Promise.all(uploadPromises);
 
-      setFormData({ 
-        title: '', 
-        description: '', 
-        amount: '', 
-        category: 'expense', 
-        priority: 'medium',
-        branchName: '',
-        country: '',
-        currency: 'USD',
-        receipt: null,
-        invoice: null
-      });
       setShowForm(false);
       fetchQueues();
     } catch (error) {
@@ -1354,28 +2027,6 @@ export function QueueList() {
     } catch (error) {
       console.error('Error deleting file:', error);
     }
-  };
-
-  const handleEditFileChange = (e: React.ChangeEvent<HTMLInputElement>, queueId: string, field: 'receipt' | 'invoice') => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
-    const fileExtension = '.' + file.name.split('.').pop()?.toLowerCase();
-    const isValidType = Object.values(ACCEPTED_FILE_TYPES)
-      .flat()
-      .includes(fileExtension);
-
-    if (!isValidType) {
-      alert('Please select a valid file type (images, PDF, or Word documents)');
-      return;
-    }
-
-    if (file.size > 5 * 1024 * 1024) {
-      alert('File size must be less than 5MB');
-      return;
-    }
-
-    handleFileUploadForQueue(file, queueId, field);
   };
 
   const startEditing = (queue: Queue) => {
@@ -1779,28 +2430,6 @@ export function QueueList() {
     </div>
   );
 
-  const renderCountryFlag = (countryCode: string, size: string = '1em') => {
-    if (!countryCode || countryCode === 'ALL' || countryCode === 'XX') {
-      return <Globe className="w-3 h-3" />;
-    }
-    
-    try {
-      return (
-        <ReactCountryFlag
-          countryCode={countryCode}
-          svg
-          style={{
-            width: size,
-            height: size,
-          }}
-          title={getCountryName(countryCode)}
-        />
-      );
-    } catch (error) {
-      return <Globe className="w-3 h-3" />;
-    }
-  };
-
   if (loading) return <LoadingSpinner />;
 
   return (
@@ -1923,6 +2552,17 @@ export function QueueList() {
         editingQueue={editingQueue}
       />
 
+      {/* Share Modal */}
+      {showShareModal && queueToShare && (
+        <ShareOptions 
+          queue={queueToShare} 
+          onClose={() => {
+            setShowShareModal(false);
+            setQueueToShare(null);
+          }} 
+        />
+      )}
+
       {/* Decision Modal */}
       {showDecisionModal && selectedQueue && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
@@ -2001,277 +2641,21 @@ export function QueueList() {
         <>
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
             {currentItems.map((queue) => (
-              <div
+              <QueueItem
                 key={queue.id}
-                className="group bg-white/70 backdrop-blur-xl rounded-2xl shadow-md hover:shadow-xl p-5 border border-slate-200/60 transition-all duration-300 hover:scale-[1.02] flex flex-col h-full"
-              >
-                {/* Header with title and actions */}
-                <div className="flex justify-between items-start mb-3">
-                  <h3 className="text-sm font-semibold text-slate-900 leading-tight flex-1 pr-2 line-clamp-2">
-                    {queue.title}
-                  </h3>
-                  <div className="flex items-center gap-1 flex-shrink-0">
-                    {queue.user_id === user?.id && (
-                      <button
-                        onClick={() => startEditing(queue)}
-                        className="text-slate-400 hover:text-blue-500 transition-all p-1.5 rounded-lg hover:bg-blue-50"
-                        title="Edit"
-                      >
-                        <Edit2 className="w-3.5 h-3.5" />
-                      </button>
-                    )}
-                    {queue.user_id === user?.id && (
-                      <button
-                        onClick={() => handleDelete(queue.id)}
-                        className="text-slate-400 hover:text-red-500 transition-all p-1.5 rounded-lg hover:bg-red-50"
-                        title="Delete"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </button>
-                    )}
-                  </div>
-                </div>
-
-                {/* Show creator email for admin/operations */}
-                {canManageAllQueues() && queue.user_email && (
-                  <p className="text-xs text-slate-500 mb-2">By: {queue.user_email}</p>
-                )}
-
-                {/* Description */}
-                {queue.description && (
-                  <p className="text-slate-600 text-xs leading-relaxed mb-3 line-clamp-2 flex-1">
-                    {queue.description}
-                  </p>
-                )}
-
-                {/* Tags */}
-                <div className="flex flex-wrap gap-1.5 mb-4">
-                  {queue.amount && (
-                    <span className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-gradient-to-r from-emerald-50 to-emerald-100/80 text-emerald-700 text-xs font-semibold border border-emerald-200/60">
-                      <HandCoins className="w-3 h-3" />
-                      {formatCurrency(queue.amount, queue.currency)}
-                      {queue.currency !== 'USD' && (
-                        <span className="text-xs text-slate-500">
-                          (${convertCurrency(queue.amount, queue.currency, 'USD').toFixed(2)})
-                        </span>
-                      )}
-                      {queue.amount && !canApproveExpense(queue.amount, queue.currency, userRole) && (
-                        <span className="text-xs">⚠️</span>
-                      )}
-                    </span>
-                  )}
-                  <span className={`inline-flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-semibold border ${getPriorityColor(queue.priority)}`}>
-                    <AlertCircle className="w-3 h-3" />
-                    {queue.priority}
-                  </span>
-                  <span className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-slate-50 text-slate-700 text-xs font-semibold border border-slate-200">
-                    <Tag className="w-3 h-3" />
-                    {queue.category}
-                  </span>
-                </div>
-
-                {/* Branch and Country Info */}
-                {(queue.branch_name || queue.country) && (
-                  <div className="flex flex-wrap gap-1.5 mb-3">
-                    {queue.branch_name && (
-                      <span className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-blue-50 text-blue-700 text-xs font-semibold border border-blue-200">
-                        <Building className="w-3 h-3" />
-                        {queue.branch_name}
-                      </span>
-                    )}
-                    {queue.country && queue.country !== 'XX' && queue.country !== 'ALL' && (
-                      <span className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-purple-50 text-purple-700 text-xs font-semibold border border-purple-200">
-                        {renderCountryFlag(queue.country)}
-                        {getCountryName(queue.country)}
-                      </span>
-                    )}
-                    {queue.country === 'XX' && (
-                      <span className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-purple-50 text-purple-700 text-xs font-semibold border border-purple-200">
-                        <Globe className="w-3 h-3" />
-                        Other
-                      </span>
-                    )}
-                  </div>
-                )}
-
-                {/* File Upload Sections */}
-                <div className="space-y-3 mb-3">
-                  {/* Receipt Section */}
-                  <div>
-                    {queue.receipt_url ? (
-                      <div className="flex items-center justify-between p-2 bg-green-50 border border-green-200 rounded-lg">
-                        <div className="flex items-center gap-2">
-                          {getFileIcon(queue.receipt_name || '')}
-                          <span className="text-xs font-medium text-green-700 truncate flex-1">
-                            {queue.receipt_name}
-                          </span>
-                        </div>
-                        <div className="flex items-center gap-1">
-                          <a
-                            href={queue.receipt_url}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="p-1 text-green-600 hover:text-green-800 transition-colors"
-                            title="Download receipt"
-                          >
-                            <Download className="w-3 h-3" />
-                          </a>
-                          <button
-                            onClick={() => handleFileDelete(queue.id, 'receipt')}
-                            className="p-1 text-red-500 hover:text-red-700 transition-colors"
-                            title="Remove receipt"
-                          >
-                            <Trash2 className="w-3 h-3" />
-                          </button>
-                        </div>
-                      </div>
-                    ) : (
-                      <div className="relative">
-                        <input
-                          type="file"
-                          id={`receipt-${queue.id}`}
-                          onChange={(e) => handleEditFileChange(e, queue.id, 'receipt')}
-                          className="hidden"
-                          accept={Object.keys(ACCEPTED_FILE_TYPES).join(',')}
-                        />
-                        <label
-                          htmlFor={`receipt-${queue.id}`}
-                          className="flex items-center gap-2 p-2 border border-dashed border-slate-300 rounded-lg hover:border-blue-400 hover:bg-blue-50/50 transition-all cursor-pointer"
-                        >
-                          <Upload className="w-3 h-3 text-slate-400" />
-                          <span className="text-xs text-slate-600 font-medium">Upload receipt</span>
-                        </label>
-                      </div>
-                    )}
-                  </div>
-
-                  {/* Invoice Section */}
-                  <div>
-                    {queue.invoice_url ? (
-                      <div className="flex items-center justify-between p-2 bg-blue-50 border border-blue-200 rounded-lg">
-                        <div className="flex items-center gap-2">
-                          {getFileIcon(queue.invoice_name || '')}
-                          <span className="text-xs font-medium text-blue-700 truncate flex-1">
-                            {queue.invoice_name}
-                          </span>
-                        </div>
-                        <div className="flex items-center gap-1">
-                          <a
-                            href={queue.invoice_url}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="p-1 text-blue-600 hover:text-blue-800 transition-colors"
-                            title="Download invoice"
-                          >
-                            <Download className="w-3 h-3" />
-                          </a>
-                          <button
-                            onClick={() => handleFileDelete(queue.id, 'invoice')}
-                            className="p-1 text-red-500 hover:text-red-700 transition-colors"
-                            title="Remove invoice"
-                          >
-                            <Trash2 className="w-3 h-3" />
-                          </button>
-                        </div>
-                      </div>
-                    ) : (
-                      <div className="relative">
-                        <input
-                          type="file"
-                          id={`invoice-${queue.id}`}
-                          onChange={(e) => handleEditFileChange(e, queue.id, 'invoice')}
-                          className="hidden"
-                          accept={Object.keys(ACCEPTED_FILE_TYPES).join(',')}
-                        />
-                        <label
-                          htmlFor={`invoice-${queue.id}`}
-                          className="flex items-center gap-2 p-2 border border-dashed border-slate-300 rounded-lg hover:border-blue-400 hover:bg-blue-50/50 transition-all cursor-pointer"
-                        >
-                          <Upload className="w-3 h-3 text-slate-400" />
-                          <span className="text-xs text-slate-600 font-medium">Upload invoice</span>
-                        </label>
-                      </div>
-                    )}
-                  </div>
-                </div>
-
-                {/* Decision History */}
-                {queue.decisions && queue.decisions.length > 0 && (
-                  <div className="mb-3">
-                    <div className="text-xs font-semibold text-slate-700 mb-2">Decision History</div>
-                    <div className="space-y-2">
-                      {queue.decisions.map((decision) => (
-                        <div key={decision.id} className="flex items-start gap-2 p-2 bg-slate-50 rounded-lg">
-                          <div className={`w-2 h-2 rounded-full mt-1.5 ${
-                            decision.status === 'approved' ? 'bg-green-500' : 'bg-red-500'
-                          }`} />
-                          <div className="flex-1">
-                            <div className="flex justify-between items-center">
-                              <span className={`text-xs font-semibold ${
-                                decision.status === 'approved' ? 'text-green-700' : 'text-red-700'
-                              }`}>
-                                {decision.status}
-                              </span>
-                              <span className="text-xs text-slate-500">
-                                {new Date(decision.created_at).toLocaleDateString()}
-                              </span>
-                            </div>
-                            {decision.comment && (
-                              <p className="text-xs text-slate-600 mt-1">{decision.comment}</p>
-                            )}
-                            {decision.user_email && (
-                              <p className="text-xs text-slate-400 mt-1">by {decision.user_email}</p>
-                            )}
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
-
-                {/* Status buttons and date */}
-                <div className="mt-auto pt-3 border-t border-slate-100">
-                  {/* Approval/Rejection buttons for admin/operations */}
-                  {canApproveReject() && queue.status === 'pending' && (
-                    <div className="flex gap-2 mb-3">
-                      <button
-                        onClick={() => openDecisionModal(queue, 'approved')}
-                        disabled={queue.amount && !canApproveExpense(queue.amount, queue.currency, userRole)}
-                        className={`flex-1 flex items-center justify-center gap-1 py-2 rounded-lg text-xs font-semibold transition-all ${
-                          queue.amount && !canApproveExpense(queue.amount, queue.currency, userRole)
-                            ? 'bg-slate-100 text-slate-400 cursor-not-allowed'
-                            : 'bg-green-500 hover:bg-green-600 text-white hover:scale-105'
-                        }`}
-                        title={
-                          queue.amount && !canApproveExpense(queue.amount, queue.currency, userRole)
-                            ? `Only admin can approve expenses above $500 USD equivalent. This amount (${formatCurrency(queue.amount, queue.currency)} = $${convertCurrency(queue.amount, queue.currency, 'USD').toFixed(2)} USD) exceeds the operations approval limit.`
-                            : 'Approve'
-                        }
-                      >
-                        <Check className="w-3 h-3" />
-                        Approve
-                      </button>
-                      <button
-                        onClick={() => openDecisionModal(queue, 'rejected')}
-                        className="flex-1 flex items-center justify-center gap-1 py-2 rounded-lg text-xs font-semibold bg-red-500 hover:bg-red-600 text-white transition-all hover:scale-105"
-                      >
-                        <XIcon className="w-3 h-3" />
-                        Reject
-                      </button>
-                    </div>
-                  )}
-
-                  <div className="flex items-center justify-between text-xs text-slate-400">
-                    <span className={`px-2 py-1 rounded-md text-xs font-medium ${getStatusColor(queue.status)}`}>
-                      {queue.status}
-                    </span>
-                    <span className="flex items-center gap-1 font-medium">
-                      <Clock className="w-3 h-3" />
-                      {new Date(queue.created_at).toLocaleDateString()}
-                    </span>
-                  </div>
-                </div>
-              </div>
+                queue={queue}
+                user={user}
+                userRole={userRole}
+                onDecision={openDecisionModal}
+                onDelete={handleDelete}
+                onEdit={fetchQueues}
+                onShare={handleShare}
+                onFileUpload={handleFileUploadForQueue}
+                onFileDelete={handleFileDelete}
+                canManageAllQueues={canManageAllQueues()}
+                canApproveReject={canApproveReject}
+                canApproveExpense={canApproveExpense}
+              />
             ))}
           </div>
 
