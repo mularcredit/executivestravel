@@ -780,7 +780,7 @@ const QueueFormModal = ({
             <Upload className="w-3.5 h-3.5 text-slate-400 flex-shrink-0" />
             <div className="flex-1">
               <p className="text-xs text-slate-600 font-medium">Upload invoice</p>
-              <p className="text-[10px] text-slate-400">JPG, PNG, PDF, DOC (Max 5MB)</p>
+              <p className="text-[10px] text-slate-400">JPG, PNG, PDFs, DOC (Max 5MB)</p>
             </div>
           </>
         )}
