@@ -5,7 +5,8 @@ import {
   Plus, Check, Circle, Trash2, Calendar, AlertCircle, Clock, User, 
   ChevronDown, X, Users, Building, Globe, Shield, RadioTower, Filter,
   Edit3, Star, Repeat, MessageSquare, Tag, FolderOpen,
-  Play, Square, Pause, List, Grid, ChevronLeft, ChevronRight
+  Play, Square, Pause, List, Grid, ChevronLeft, ChevronRight,
+  StickyNote, Bell, BellOff
 } from 'lucide-react';
 import ReactCountryFlag from 'react-country-flag';
 
@@ -21,7 +22,8 @@ const TODO_CONSTANTS = {
     { name: 'Other', code: 'XX' }
   ] as const,
   tabs: ['all', 'active', 'completed', 'assigned-to-me', 'created-by-me', 'important'] as const,
-  itemsPerPage: 9
+  itemsPerPage: 9,
+  reminderTypes: ['none', 'at_time', '5_minutes', '15_minutes', '1_hour', '1_day'] as const
 } as const;
 
 // Date filter options
@@ -57,8 +59,8 @@ type Todo = {
   repeat: string;
   completed_comment: string | null;
   completed_at: string | null;
-  time_tracked?: number; // Total time tracked in seconds
-  time_entries?: TimeEntry[]; // Individual time entries
+  time_tracked?: number;
+  time_entries?: TimeEntry[];
 };
 
 type TimeEntry = {
@@ -66,7 +68,30 @@ type TimeEntry = {
   todo_id: string;
   start_time: string;
   end_time: string | null;
-  duration: number; // in seconds
+  duration: number;
+};
+
+type Note = {
+  id: string;
+  user_id: string;
+  title: string;
+  content: string;
+  created_at: string;
+  updated_at: string;
+  color: string;
+  tags: string[];
+};
+
+type Reminder = {
+  id: string;
+  user_id: string;
+  title: string;
+  description: string;
+  reminder_date: string;
+  reminder_type: string;
+  completed: boolean;
+  created_at: string;
+  todo_id?: string | null;
 };
 
 type FormData = {
@@ -143,6 +168,17 @@ const getCategoryColor = (category: string) => {
   }
 };
 
+const getNoteColor = (color: string) => {
+  switch (color) {
+    case 'yellow': return 'bg-yellow-50 border-yellow-200';
+    case 'blue': return 'bg-blue-50 border-blue-200';
+    case 'green': return 'bg-green-50 border-green-200';
+    case 'pink': return 'bg-pink-50 border-pink-200';
+    case 'purple': return 'bg-purple-50 border-purple-200';
+    default: return 'bg-slate-50 border-slate-200';
+  }
+};
+
 const getDisplayName = (name: string, email: string) => {
   return name || email?.split('@')[0] || 'Unknown User';
 };
@@ -182,12 +218,11 @@ const formatTime = (seconds: number) => {
   }
 };
 
-// Time tracking functions
 const calculateTotalTrackedTime = (timeEntries: TimeEntry[] = []) => {
   return timeEntries.reduce((total, entry) => total + entry.duration, 0);
 };
 
-// Simple Form Components (keep the same as before)
+// Simple Form Components
 const FormInput = ({ 
   label, 
   value, 
@@ -287,7 +322,496 @@ const FormTextarea = ({
   );
 };
 
-// Standalone TodoFormModal component (keep the same as before)
+// Notes Pad Modal Component
+const NotesPadModal = ({ 
+  isOpen, 
+  onClose, 
+  notes,
+  onSaveNote,
+  onDeleteNote
+}: { 
+  isOpen: boolean;
+  onClose: () => void;
+  notes: Note[];
+  onSaveNote: (note: { title: string; content: string; color: string; tags: string[] }) => void;
+  onDeleteNote: (id: string) => void;
+}) => {
+  const [newNote, setNewNote] = useState({ title: '', content: '', color: 'yellow', tags: [] as string[] });
+  const [tagInput, setTagInput] = useState('');
+  const [editingNote, setEditingNote] = useState<Note | null>(null);
+
+  const resetForm = () => {
+    setNewNote({ title: '', content: '', color: 'yellow', tags: [] });
+    setTagInput('');
+    setEditingNote(null);
+  };
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (newNote.title.trim() && newNote.content.trim()) {
+      onSaveNote(newNote);
+      resetForm();
+    }
+  };
+
+  const handleEdit = (note: Note) => {
+    setEditingNote(note);
+    setNewNote({
+      title: note.title,
+      content: note.content,
+      color: note.color,
+      tags: note.tags
+    });
+  };
+
+  const handleUpdate = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (editingNote && newNote.title.trim() && newNote.content.trim()) {
+      onSaveNote({ ...newNote, id: editingNote.id });
+      resetForm();
+    }
+  };
+
+  const addTag = () => {
+    if (tagInput.trim() && !newNote.tags.includes(tagInput.trim())) {
+      setNewNote(prev => ({
+        ...prev,
+        tags: [...prev.tags, tagInput.trim()]
+      }));
+      setTagInput('');
+    }
+  };
+
+  const removeTag = (tagToRemove: string) => {
+    setNewNote(prev => ({
+      ...prev,
+      tags: prev.tags.filter(tag => tag !== tagToRemove)
+    }));
+  };
+
+  const colorOptions = [
+    { value: 'yellow', label: 'Yellow', class: 'bg-yellow-500' },
+    { value: 'blue', label: 'Blue', class: 'bg-blue-500' },
+    { value: 'green', label: 'Green', class: 'bg-green-500' },
+    { value: 'pink', label: 'Pink', class: 'bg-pink-500' },
+    { value: 'purple', label: 'Purple', class: 'bg-purple-500' }
+  ];
+
+  if (!isOpen) return null;
+
+  return (
+    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+      <div className="bg-white rounded-2xl shadow-xl w-full max-w-4xl max-h-[90vh] overflow-y-auto">
+        <div className="flex justify-between items-center p-6 border-b border-slate-200 sticky top-0 bg-white z-10">
+          <h3 className="text-xl font-semibold text-slate-900">Notes Pad</h3>
+          <button 
+            onClick={() => { onClose(); resetForm(); }}
+            className="text-slate-400 hover:text-slate-600 transition-colors p-1 rounded-lg"
+          >
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+        
+        <div className="p-6">
+          {/* Note Form */}
+          <form onSubmit={editingNote ? handleUpdate : handleSubmit} className="mb-8">
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+              <div className="space-y-4">
+                <FormInput
+                  label="Note Title"
+                  value={newNote.title}
+                  onChange={(value) => setNewNote(prev => ({ ...prev, title: value }))}
+                  placeholder="Enter note title..."
+                  required
+                  icon={StickyNote}
+                />
+                
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-2">Color</label>
+                  <div className="flex gap-2">
+                    {colorOptions.map(color => (
+                      <button
+                        key={color.value}
+                        type="button"
+                        onClick={() => setNewNote(prev => ({ ...prev, color: color.value }))}
+                        className={`w-8 h-8 rounded-full border-2 ${
+                          newNote.color === color.value ? 'border-slate-800' : 'border-slate-300'
+                        } ${color.class}`}
+                        title={color.label}
+                      />
+                    ))}
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-2">Tags</label>
+                  <div className="flex gap-2 mb-2">
+                    <input
+                      type="text"
+                      value={tagInput}
+                      onChange={(e) => setTagInput(e.target.value)}
+                      onKeyPress={(e) => e.key === 'Enter' && (e.preventDefault(), addTag())}
+                      className="flex-1 px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all text-xs"
+                      placeholder="Add tag..."
+                    />
+                    <button
+                      type="button"
+                      onClick={addTag}
+                      className="px-3 py-2 bg-blue-500 text-white rounded-lg text-xs font-semibold hover:bg-blue-600 transition-all"
+                    >
+                      Add
+                    </button>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    {newNote.tags.map(tag => (
+                      <span key={tag} className="inline-flex items-center gap-1 px-2 py-1 bg-slate-100 text-slate-700 rounded-lg text-xs">
+                        {tag}
+                        <button
+                          type="button"
+                          onClick={() => removeTag(tag)}
+                          className="text-slate-500 hover:text-slate-700"
+                        >
+                          <X className="w-3 h-3" />
+                        </button>
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              </div>
+
+              <div>
+                <FormTextarea
+                  label="Note Content"
+                  value={newNote.content}
+                  onChange={(value) => setNewNote(prev => ({ ...prev, content: value }))}
+                  placeholder="Write your note here..."
+                  required
+                />
+              </div>
+            </div>
+
+            <div className="flex gap-3 pt-4">
+              <button
+                type="submit"
+                className="flex-1 bg-gradient-to-r from-blue-500 to-blue-600 hover:from-blue-600 hover:to-blue-700 text-white py-3 rounded-xl font-semibold transition-all text-xs"
+              >
+                {editingNote ? 'Update Note' : 'Create Note'}
+              </button>
+              {editingNote && (
+                <button
+                  type="button"
+                  onClick={resetForm}
+                  className="flex-1 bg-slate-100 hover:bg-slate-200 text-slate-700 py-3 rounded-xl font-semibold transition-all text-xs"
+                >
+                  Cancel Edit
+                </button>
+              )}
+            </div>
+          </form>
+
+          {/* Notes Grid */}
+          <div>
+            <h4 className="text-sm font-semibold text-slate-900 mb-4">Your Notes ({notes.length})</h4>
+            {notes.length === 0 ? (
+              <div className="text-center py-8 text-slate-500">
+                <StickyNote className="w-12 h-12 text-slate-300 mx-auto mb-3" />
+                <p className="text-sm">No notes yet. Create your first note!</p>
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                {notes.map(note => (
+                  <div
+                    key={note.id}
+                    className={`p-4 rounded-xl border ${getNoteColor(note.color)} transition-all hover:shadow-lg`}
+                  >
+                    <div className="flex justify-between items-start mb-2">
+                      <h5 className="font-semibold text-slate-900 text-sm">{note.title}</h5>
+                      <div className="flex gap-1">
+                        <button
+                          onClick={() => handleEdit(note)}
+                          className="text-slate-400 hover:text-blue-500 transition-colors p-1"
+                          title="Edit note"
+                        >
+                          <Edit3 className="w-3 h-3" />
+                        </button>
+                        <button
+                          onClick={() => onDeleteNote(note.id)}
+                          className="text-slate-400 hover:text-red-500 transition-colors p-1"
+                          title="Delete note"
+                        >
+                          <Trash2 className="w-3 h-3" />
+                        </button>
+                      </div>
+                    </div>
+                    <p className="text-slate-600 text-xs mb-3 whitespace-pre-wrap">{note.content}</p>
+                    {note.tags.length > 0 && (
+                      <div className="flex flex-wrap gap-1">
+                        {note.tags.map(tag => (
+                          <span key={tag} className="px-2 py-1 bg-white/50 text-slate-600 rounded text-xs">
+                            {tag}
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                    <div className="text-xs text-slate-500 mt-2">
+                      {new Date(note.updated_at).toLocaleDateString()}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// Reminders Modal Component
+const RemindersModal = ({ 
+  isOpen, 
+  onClose, 
+  reminders,
+  onSaveReminder,
+  onDeleteReminder,
+  onToggleReminder,
+  todos
+}: { 
+  isOpen: boolean;
+  onClose: () => void;
+  reminders: Reminder[];
+  onSaveReminder: (reminder: { title: string; description: string; reminder_date: string; reminder_type: string; todo_id?: string }) => void;
+  onDeleteReminder: (id: string) => void;
+  onToggleReminder: (id: string, completed: boolean) => void;
+  todos: Todo[];
+}) => {
+  const [newReminder, setNewReminder] = useState({ 
+    title: '', 
+    description: '', 
+    reminder_date: '', 
+    reminder_type: 'at_time',
+    todo_id: '' 
+  });
+
+  const resetForm = () => {
+    setNewReminder({ 
+      title: '', 
+      description: '', 
+      reminder_date: '', 
+      reminder_type: 'at_time',
+      todo_id: '' 
+    });
+  };
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (newReminder.title.trim() && newReminder.reminder_date) {
+      onSaveReminder(newReminder);
+      resetForm();
+    }
+  };
+
+  const reminderTypeOptions = [
+    { value: 'none', label: 'No reminder' },
+    { value: 'at_time', label: 'At scheduled time' },
+    { value: '5_minutes', label: '5 minutes before' },
+    { value: '15_minutes', label: '15 minutes before' },
+    { value: '1_hour', label: '1 hour before' },
+    { value: '1_day', label: '1 day before' }
+  ];
+
+  const todoOptions = [
+    { value: '', label: 'No task linked' },
+    ...todos.filter(todo => !todo.completed).map(todo => ({
+      value: todo.id,
+      label: `${todo.title} (${todo.status})`
+    }))
+  ];
+
+  const upcomingReminders = reminders.filter(r => !r.completed && new Date(r.reminder_date) > new Date());
+  const pastReminders = reminders.filter(r => r.completed || new Date(r.reminder_date) <= new Date());
+
+  if (!isOpen) return null;
+
+  return (
+    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+      <div className="bg-white rounded-2xl shadow-xl w-full max-w-4xl max-h-[90vh] overflow-y-auto">
+        <div className="flex justify-between items-center p-6 border-b border-slate-200 sticky top-0 bg-white z-10">
+          <h3 className="text-xl font-semibold text-slate-900">Reminders</h3>
+          <button 
+            onClick={() => { onClose(); resetForm(); }}
+            className="text-slate-400 hover:text-slate-600 transition-colors p-1 rounded-lg"
+          >
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+        
+        <div className="p-6">
+          {/* Reminder Form */}
+          <form onSubmit={handleSubmit} className="mb-8">
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+              <div className="space-y-4">
+                <FormInput
+                  label="Reminder Title"
+                  value={newReminder.title}
+                  onChange={(value) => setNewReminder(prev => ({ ...prev, title: value }))}
+                  placeholder="What do you want to be reminded about?"
+                  required
+                  icon={Bell}
+                />
+
+                <FormSelect
+                  label="Link to Task (Optional)"
+                  value={newReminder.todo_id}
+                  onChange={(value) => setNewReminder(prev => ({ ...prev, todo_id: value }))}
+                  options={todoOptions}
+                  icon={FolderOpen}
+                />
+
+                <FormSelect
+                  label="Reminder Type"
+                  value={newReminder.reminder_type}
+                  onChange={(value) => setNewReminder(prev => ({ ...prev, reminder_type: value }))}
+                  options={reminderTypeOptions}
+                  icon={Clock}
+                />
+              </div>
+
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-2">Reminder Date & Time</label>
+                  <div className="relative">
+                    <Calendar className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+                    <input
+                      type="datetime-local"
+                      value={newReminder.reminder_date}
+                      onChange={(e) => setNewReminder(prev => ({ ...prev, reminder_date: e.target.value }))}
+                      className="w-full pl-9 pr-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all text-xs"
+                      required
+                    />
+                  </div>
+                </div>
+
+                <FormTextarea
+                  label="Description (Optional)"
+                  value={newReminder.description}
+                  onChange={(value) => setNewReminder(prev => ({ ...prev, description: value }))}
+                  placeholder="Add any additional details..."
+                />
+              </div>
+            </div>
+
+            <div className="flex gap-3 pt-4">
+              <button
+                type="submit"
+                className="flex-1 bg-gradient-to-r from-green-500 to-green-600 hover:from-green-600 hover:to-green-700 text-white py-3 rounded-xl font-semibold transition-all text-xs"
+              >
+                Set Reminder
+              </button>
+            </div>
+          </form>
+
+          {/* Upcoming Reminders */}
+          <div className="mb-8">
+            <h4 className="text-sm font-semibold text-slate-900 mb-4">
+              Upcoming Reminders ({upcomingReminders.length})
+            </h4>
+            {upcomingReminders.length === 0 ? (
+              <div className="text-center py-4 text-slate-500">
+                <p className="text-sm">No upcoming reminders</p>
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {upcomingReminders.map(reminder => (
+                  <div key={reminder.id} className="flex items-center justify-between p-4 bg-blue-50 border border-blue-200 rounded-xl">
+                    <div className="flex items-center gap-3">
+                      <button
+                        onClick={() => onToggleReminder(reminder.id, true)}
+                        className="text-blue-500 hover:text-green-500 transition-colors"
+                        title="Mark as completed"
+                      >
+                        <Circle className="w-5 h-5" />
+                      </button>
+                      <div>
+                        <h5 className="font-semibold text-slate-900 text-sm">{reminder.title}</h5>
+                        <p className="text-slate-600 text-xs">{reminder.description}</p>
+                        <div className="flex items-center gap-2 mt-1">
+                          <Clock className="w-3 h-3 text-slate-400" />
+                          <span className="text-xs text-slate-500">
+                            {new Date(reminder.reminder_date).toLocaleString()}
+                          </span>
+                          {reminder.todo_id && (
+                            <span className="inline-flex items-center gap-1 px-2 py-1 bg-blue-100 text-blue-700 rounded text-xs">
+                              Linked to task
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                    <button
+                      onClick={() => onDeleteReminder(reminder.id)}
+                      className="text-slate-400 hover:text-red-500 transition-colors p-1"
+                      title="Delete reminder"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* Past/Completed Reminders */}
+          <div>
+            <h4 className="text-sm font-semibold text-slate-900 mb-4">
+              Completed Reminders ({pastReminders.length})
+            </h4>
+            {pastReminders.length === 0 ? (
+              <div className="text-center py-4 text-slate-500">
+                <p className="text-sm">No completed reminders</p>
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {pastReminders.map(reminder => (
+                  <div key={reminder.id} className="flex items-center justify-between p-4 bg-slate-50 border border-slate-200 rounded-xl opacity-60">
+                    <div className="flex items-center gap-3">
+                      <button
+                        onClick={() => onToggleReminder(reminder.id, false)}
+                        className="text-green-500 hover:text-blue-500 transition-colors"
+                        title="Mark as incomplete"
+                      >
+                        <Check className="w-5 h-5" />
+                      </button>
+                      <div>
+                        <h5 className="font-semibold text-slate-900 text-sm line-through">{reminder.title}</h5>
+                        <p className="text-slate-600 text-xs">{reminder.description}</p>
+                        <div className="flex items-center gap-2 mt-1">
+                          <Clock className="w-3 h-3 text-slate-400" />
+                          <span className="text-xs text-slate-500">
+                            {new Date(reminder.reminder_date).toLocaleString()}
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                    <button
+                      onClick={() => onDeleteReminder(reminder.id)}
+                      className="text-slate-400 hover:text-red-500 transition-colors p-1"
+                      title="Delete reminder"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// TodoFormModal Component
 const TodoFormModal = ({ 
   isOpen, 
   onClose, 
@@ -318,7 +842,6 @@ const TodoFormModal = ({
     repeat: 'none'
   });
 
-  // Reset form when modal opens/closes or editingTodo changes
   useEffect(() => {
     if (isOpen) {
       if (editingTodo) {
@@ -612,7 +1135,7 @@ const TodoFormModal = ({
   );
 };
 
-// Completion Comment Modal (keep the same as before)
+// Completion Comment Modal
 const CompletionCommentModal = ({ 
   isOpen, 
   onClose, 
@@ -675,7 +1198,7 @@ const CompletionCommentModal = ({
   );
 };
 
-// Dashboard Summary Component (keep the same as before)
+// Dashboard Summary Component
 const DashboardSummary = ({ 
   filteredTodos, 
   user, 
@@ -834,7 +1357,13 @@ export function TodoList() {
   const [showTimeTracking, setShowTimeTracking] = useState(false);
   const [selectedTodoForTime, setSelectedTodoForTime] = useState<Todo | null>(null);
   const [timeEntries, setTimeEntries] = useState<TimeEntry[]>([]);
- const [viewMode, setViewMode] = useState<'grid' | 'list'>('list');
+  const [viewMode, setViewMode] = useState<'grid' | 'list'>('list');
+  
+  // New state for notes and reminders
+  const [notes, setNotes] = useState<Note[]>([]);
+  const [reminders, setReminders] = useState<Reminder[]>([]);
+  const [showNotesPad, setShowNotesPad] = useState(false);
+  const [showReminders, setShowReminders] = useState(false);
   
   // Filter states
   const [dateFilter, setDateFilter] = useState('all');
@@ -1083,7 +1612,7 @@ export function TodoList() {
     setShowTimeTracking(true);
   }, [fetchTimeEntries]);
 
-  // Memoized handlers (keep existing handlers, add new ones as needed)
+  // Memoized handlers
   const handleFormSubmit = useCallback(async (formData: FormData) => {
     if (!user) return;
 
@@ -1150,10 +1679,47 @@ export function TodoList() {
     setShowForm(true);
   }, []);
 
-  // Data fetching with user roles (keep existing implementation)
+  // Fetch notes and reminders
+  const fetchNotes = useCallback(async () => {
+    if (!user) return;
+    
+    try {
+      const { data, error } = await supabase
+        .from('notes')
+        .select('*')
+        .eq('user_id', user.id)
+        .order('updated_at', { ascending: false });
+
+      if (error) throw error;
+      setNotes(data || []);
+    } catch (error) {
+      console.error('Error fetching notes:', error);
+    }
+  }, [user]);
+
+  const fetchReminders = useCallback(async () => {
+    if (!user) return;
+    
+    try {
+      const { data, error } = await supabase
+        .from('reminders')
+        .select('*')
+        .eq('user_id', user.id)
+        .order('reminder_date', { ascending: true });
+
+      if (error) throw error;
+      setReminders(data || []);
+    } catch (error) {
+      console.error('Error fetching reminders:', error);
+    }
+  }, [user]);
+
+  // Data fetching with user roles
   useEffect(() => {
     if (user) {
       fetchUserRoleAndData();
+      fetchNotes();
+      fetchReminders();
     }
   }, [user]);
 
@@ -1463,7 +2029,7 @@ export function TodoList() {
     }
   };
 
-  // Permission checks (keep existing)
+  // Permission checks
   const canManageAllTasks = useCallback((role = userRole) => {
     return ['admin', 'operations'].includes(role);
   }, [userRole]);
@@ -1477,7 +2043,136 @@ export function TodoList() {
     return todo.user_id === user?.id;
   }, [userRole, user]);
 
-  // Filter reset functions (keep existing)
+  // Notes and Reminders handlers
+  const handleSaveNote = useCallback(async (noteData: { title: string; content: string; color: string; tags: string[] }) => {
+    if (!user) return;
+
+    try {
+      if (noteData.id) {
+        // Update existing note
+        const { error } = await supabase
+          .from('notes')
+          .update({
+            title: noteData.title,
+            content: noteData.content,
+            color: noteData.color,
+            tags: noteData.tags,
+            updated_at: new Date().toISOString()
+          })
+          .eq('id', noteData.id);
+
+        if (error) throw error;
+      } else {
+        // Create new note
+        const { error } = await supabase.from('notes').insert([{
+          user_id: user.id,
+          title: noteData.title,
+          content: noteData.content,
+          color: noteData.color,
+          tags: noteData.tags
+        }]);
+
+        if (error) throw error;
+      }
+
+      fetchNotes();
+    } catch (error) {
+      console.error('Error saving note:', error);
+    }
+  }, [user, fetchNotes]);
+
+  const handleDeleteNote = useCallback(async (id: string) => {
+    try {
+      const { error } = await supabase.from('notes').delete().eq('id', id);
+      if (error) throw error;
+      fetchNotes();
+    } catch (error) {
+      console.error('Error deleting note:', error);
+    }
+  }, [fetchNotes]);
+
+  const handleSaveReminder = useCallback(async (reminderData: { title: string; description: string; reminder_date: string; reminder_type: string; todo_id?: string }) => {
+    if (!user) return;
+
+    try {
+      const { error } = await supabase.from('reminders').insert([{
+        user_id: user.id,
+        title: reminderData.title,
+        description: reminderData.description,
+        reminder_date: reminderData.reminder_date,
+        reminder_type: reminderData.reminder_type,
+        todo_id: reminderData.todo_id || null,
+        completed: false
+      }]);
+
+      if (error) throw error;
+      fetchReminders();
+    } catch (error) {
+      console.error('Error saving reminder:', error);
+    }
+  }, [user, fetchReminders]);
+
+  const handleDeleteReminder = useCallback(async (id: string) => {
+    try {
+      const { error } = await supabase.from('reminders').delete().eq('id', id);
+      if (error) throw error;
+      fetchReminders();
+    } catch (error) {
+      console.error('Error deleting reminder:', error);
+    }
+  }, [fetchReminders]);
+
+  const handleToggleReminder = useCallback(async (id: string, completed: boolean) => {
+    try {
+      const { error } = await supabase
+        .from('reminders')
+        .update({ completed })
+        .eq('id', id);
+
+      if (error) throw error;
+      fetchReminders();
+    } catch (error) {
+      console.error('Error toggling reminder:', error);
+    }
+  }, [fetchReminders]);
+
+  // Check for upcoming reminders
+  useEffect(() => {
+    const checkReminders = () => {
+      const now = new Date();
+      const upcomingReminders = reminders.filter(
+        reminder => !reminder.completed && new Date(reminder.reminder_date) <= now
+      );
+
+      upcomingReminders.forEach(reminder => {
+        // Show browser notification
+        if ('Notification' in window && Notification.permission === 'granted') {
+          new Notification(`Reminder: ${reminder.title}`, {
+            body: reminder.description,
+            icon: '/favicon.ico'
+          });
+        }
+
+        // Show alert as fallback
+        alert(`Reminder: ${reminder.title}\n${reminder.description}`);
+        
+        // Mark as completed
+        handleToggleReminder(reminder.id, true);
+      });
+    };
+
+    const interval = setInterval(checkReminders, 60000); // Check every minute
+    return () => clearInterval(interval);
+  }, [reminders, handleToggleReminder]);
+
+  // Request notification permission
+  useEffect(() => {
+    if ('Notification' in window && Notification.permission === 'default') {
+      Notification.requestPermission();
+    }
+  }, []);
+
+  // Filter reset functions
   const resetDateFilter = useCallback(() => {
     setDateFilter('all');
     setCustomStartDate('');
@@ -1505,7 +2200,7 @@ export function TodoList() {
     return dateFilter !== 'all' || branchFilter || countryFilter || statusFilter || categoryFilter || importantFilter;
   }, [dateFilter, branchFilter, countryFilter, statusFilter, categoryFilter, importantFilter]);
 
-  // Todo actions (keep existing, add time tracking)
+  // Todo actions
   const toggleComplete = useCallback(async (id: string, completed: boolean) => {
     if (activeTimer?.todoId === id) {
       await stopTimer();
@@ -1757,7 +2452,7 @@ export function TodoList() {
     );
   };
 
-  // StatusCategoryFilterDropdown (keep existing implementation)
+  // StatusCategoryFilterDropdown
   const StatusCategoryFilterDropdown = () => (
     <div className="relative">
       <button
@@ -2320,6 +3015,34 @@ export function TodoList() {
             </button>
           </div>
 
+          {/* Notes Pad Button */}
+          <button
+            onClick={() => setShowNotesPad(true)}
+            className="flex items-center gap-2 bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-600 hover:to-amber-700 text-white px-4 py-2.5 rounded-xl font-semibold shadow-md hover:shadow-lg transition-all text-xs"
+          >
+            <StickyNote className="w-4 h-4" />
+            Notes
+            {notes.length > 0 && (
+              <span className="bg-amber-700 text-white rounded-full w-5 h-5 text-xs flex items-center justify-center">
+                {notes.length}
+              </span>
+            )}
+          </button>
+
+          {/* Reminders Button */}
+          <button
+            onClick={() => setShowReminders(true)}
+            className="flex items-center gap-2 bg-gradient-to-r from-green-500 to-green-600 hover:from-green-600 hover:to-green-700 text-white px-4 py-2.5 rounded-xl font-semibold shadow-md hover:shadow-lg transition-all text-xs"
+          >
+            <Bell className="w-4 h-4" />
+            Reminders
+            {reminders.filter(r => !r.completed).length > 0 && (
+              <span className="bg-green-700 text-white rounded-full w-5 h-5 text-xs flex items-center justify-center">
+                {reminders.filter(r => !r.completed).length}
+              </span>
+            )}
+          </button>
+
           {/* Status & Category Filter */}
           <StatusCategoryFilterDropdown />
 
@@ -2441,6 +3164,24 @@ export function TodoList() {
         }}
         todo={selectedTodoForTime}
         timeEntries={timeEntries}
+      />
+
+      <NotesPadModal
+        isOpen={showNotesPad}
+        onClose={() => setShowNotesPad(false)}
+        notes={notes}
+        onSaveNote={handleSaveNote}
+        onDeleteNote={handleDeleteNote}
+      />
+
+      <RemindersModal
+        isOpen={showReminders}
+        onClose={() => setShowReminders(false)}
+        reminders={reminders}
+        onSaveReminder={handleSaveReminder}
+        onDeleteReminder={handleDeleteReminder}
+        onToggleReminder={handleToggleReminder}
+        todos={todos}
       />
 
       {filteredTodos.length === 0 ? (

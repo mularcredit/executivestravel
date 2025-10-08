@@ -265,7 +265,7 @@ const DashboardSummary = ({
     queue.priority === 'high' && queue.status === 'pending'
   );
   const requiresAttentionQueues = filteredQueues.filter(queue => 
-    queue.amount && queue.amount > 500 && queue.status === 'pending'
+    queue.amount && convertCurrency(queue.amount, queue.currency, 'USD') > 500 && queue.status === 'pending'
   );
 
   if (canManageAllQueues) return null;
@@ -538,9 +538,9 @@ const QueueFormModal = ({
                   <label htmlFor="receipt-upload" className="cursor-pointer block">
                     <div className="text-center">
                       {formData.receipt ? (
-                        <FileText className="w-8 h-8 text-green-500 mx-auto mb-2" />
+                        <FileText className="w-4 h-4 text-green-500 mx-auto mb-2" />
                       ) : (
-                        <Upload className="w-8 h-8 text-slate-400 mx-auto mb-2" />
+                        <Upload className="w-4 h-4 text-slate-400 mx-auto mb-2" />
                       )}
                       <p className="text-xs text-slate-600 font-medium mb-1">
                         {formData.receipt ? formData.receipt.name : 'Click to upload receipt'}
@@ -664,9 +664,9 @@ const QueueFormModal = ({
                   <label htmlFor="invoice-upload" className="cursor-pointer block">
                     <div className="text-center">
                       {formData.invoice ? (
-                        <FileText className="w-8 h-8 text-green-500 mx-auto mb-2" />
+                        <FileText className="w-4 h-4 text-green-500 mx-auto mb-2" />
                       ) : (
-                        <Upload className="w-8 h-8 text-slate-400 mx-auto mb-2" />
+                        <Upload className="w-4 h-4 text-slate-400 mx-auto mb-2" />
                       )}
                       <p className="text-xs text-slate-600 font-medium mb-1">
                         {formData.invoice ? formData.invoice.name : 'Click to upload invoice'}
@@ -778,7 +778,7 @@ export function QueueList() {
         return queuesToFilter.filter(queue => queue.user_id === user?.id);
       case 'requires-attention':
         return queuesToFilter.filter(queue => 
-          (queue.amount && queue.amount > 500 && queue.status === 'pending') || 
+          (queue.amount && convertCurrency(queue.amount, queue.currency, 'USD') > 500 && queue.status === 'pending') || 
           queue.priority === 'high'
         );
       default:
@@ -1061,7 +1061,7 @@ export function QueueList() {
     }
   };
 
-  // Permission checks
+  // Permission checks - UPDATED WITH CURRENCY CONVERSION
   const canManageAllQueues = useCallback((role = userRole) => {
     return ['admin', 'operations'].includes(role);
   }, [userRole]);
@@ -1070,15 +1070,24 @@ export function QueueList() {
     return ['admin', 'operations'].includes(role);
   };
 
-  const canApproveExpense = (amount: number | null, role = userRole) => {
+  const canApproveExpense = (amount: number | null, currency: string, role = userRole) => {
     if (!amount) return true;
+    
+    // Convert amount to USD for approval limit checking
+    let amountInUSD = amount;
+    
+    if (currency !== 'USD') {
+      amountInUSD = convertCurrency(amount, currency, 'USD');
+    }
+    
+    console.log(`Approval check: ${amount} ${currency} = ${amountInUSD} USD, Role: ${role}`);
     
     if (role === 'admin') {
       return true;
     }
     
     if (role === 'operations') {
-      return amount <= 500;
+      return amountInUSD <= 500;
     }
     
     return false;
@@ -1128,8 +1137,9 @@ export function QueueList() {
   };
 
   const openDecisionModal = (queue: Queue, status: 'approved' | 'rejected') => {
-    if (status === 'approved' && queue.amount && !canApproveExpense(queue.amount, userRole)) {
-      alert('Only admin can approve expenses above $500');
+    if (status === 'approved' && queue.amount && !canApproveExpense(queue.amount, queue.currency, userRole)) {
+      const amountInUSD = convertCurrency(queue.amount, queue.currency, 'USD');
+      alert(`Only admin can approve expenses above $500 USD equivalent. This amount (${formatCurrency(queue.amount, queue.currency)} = $${amountInUSD.toFixed(2)} USD) exceeds the operations approval limit.`);
       return;
     }
     
@@ -1466,7 +1476,7 @@ export function QueueList() {
         { id: 'rejected', label: 'Rejected', count: queues.filter(q => q.status === 'rejected').length },
         { id: 'my-items', label: 'My Items', count: queues.filter(q => q.user_id === user?.id).length },
         { id: 'requires-attention', label: 'Requires Attention', count: queues.filter(q => 
-          (q.amount && q.amount > 500 && q.status === 'pending') || q.priority === 'high'
+          (q.amount && convertCurrency(q.amount, q.currency, 'USD') > 500 && q.status === 'pending') || q.priority === 'high'
         ).length },
       ].map((tab) => (
         <button
@@ -1934,8 +1944,13 @@ export function QueueList() {
                 <h4 className="font-semibold text-slate-900 mb-2">{selectedQueue.title}</h4>
                 {selectedQueue.amount && (
                   <p className="text-sm text-slate-600">
-                                        Amount: {formatCurrency(selectedQueue.amount, selectedQueue.currency)}
-                    {selectedQueue.amount > 500 && userRole === 'operations' && (
+                    Amount: {formatCurrency(selectedQueue.amount, selectedQueue.currency)}
+                    {selectedQueue.currency !== 'USD' && (
+                      <span className="text-xs text-slate-500 ml-1">
+                        (${convertCurrency(selectedQueue.amount, selectedQueue.currency, 'USD').toFixed(2)} USD)
+                      </span>
+                    )}
+                    {selectedQueue.amount && !canApproveExpense(selectedQueue.amount, selectedQueue.currency, userRole) && (
                       <span className="text-amber-600 text-xs ml-2">(Requires admin approval)</span>
                     )}
                   </p>
@@ -2035,7 +2050,12 @@ export function QueueList() {
                     <span className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-gradient-to-r from-emerald-50 to-emerald-100/80 text-emerald-700 text-xs font-semibold border border-emerald-200/60">
                       <HandCoins className="w-3 h-3" />
                       {formatCurrency(queue.amount, queue.currency)}
-                      {queue.amount > 500 && (
+                      {queue.currency !== 'USD' && (
+                        <span className="text-xs text-slate-500">
+                          (${convertCurrency(queue.amount, queue.currency, 'USD').toFixed(2)})
+                        </span>
+                      )}
+                      {queue.amount && !canApproveExpense(queue.amount, queue.currency, userRole) && (
                         <span className="text-xs">⚠️</span>
                       )}
                     </span>
@@ -2216,15 +2236,15 @@ export function QueueList() {
                     <div className="flex gap-2 mb-3">
                       <button
                         onClick={() => openDecisionModal(queue, 'approved')}
-                        disabled={queue.amount && !canApproveExpense(queue.amount, userRole)}
+                        disabled={queue.amount && !canApproveExpense(queue.amount, queue.currency, userRole)}
                         className={`flex-1 flex items-center justify-center gap-1 py-2 rounded-lg text-xs font-semibold transition-all ${
-                          queue.amount && !canApproveExpense(queue.amount, userRole)
+                          queue.amount && !canApproveExpense(queue.amount, queue.currency, userRole)
                             ? 'bg-slate-100 text-slate-400 cursor-not-allowed'
                             : 'bg-green-500 hover:bg-green-600 text-white hover:scale-105'
                         }`}
                         title={
-                          queue.amount && !canApproveExpense(queue.amount, userRole)
-                            ? 'Only admin can approve expenses above $500'
+                          queue.amount && !canApproveExpense(queue.amount, queue.currency, userRole)
+                            ? `Only admin can approve expenses above $500 USD equivalent. This amount (${formatCurrency(queue.amount, queue.currency)} = $${convertCurrency(queue.amount, queue.currency, 'USD').toFixed(2)} USD) exceeds the operations approval limit.`
                             : 'Approve'
                         }
                       >

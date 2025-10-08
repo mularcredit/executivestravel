@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { QueueList } from './QueueList';
 import { TodoList } from './TodoList';
-import { LogOut, ListTodo, User, ChevronDown, Settings, Shield } from 'lucide-react';
+import { LogOut, ListTodo, User, ChevronDown, Settings, Shield, FileStack, AlarmClockCheck } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 
 type View = 'queues' | 'todos';
@@ -28,11 +28,11 @@ export function Dashboard() {
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50/30 to-slate-100">
-      <nav className="bg-blue-600/80 backdrop-blur-xl border-b border-blue-500/60 sticky top-0 z-50 shadow-sm">
+      <nav className="bg-blue-700 backdrop-blur-xl border-b border-blue-500/60 sticky top-0 z-50 shadow-sm">
         <div className="max-w-7xl mx-auto px-6 lg:px-8">
           <div className="flex justify-between items-center h-12">
             <div className="flex items-center gap-3">
-              <div className="w-8 h-8 bg-white/20 rounded-xl flex items-center justify-center shadow-lg transform hover:scale-105 transition-transform">
+              <div className="w-8 h-8  rounded-xl flex items-center justify-center shadow-lg transform hover:scale-105 transition-transform">
                 <svg 
                   className="w-3 h-3 text-white" 
                   viewBox="0 0 24 24" 
@@ -140,13 +140,8 @@ export function Dashboard() {
                 : 'text-slate-600 hover:text-slate-900 hover:bg-white/50'
             }`}
           >
-            <svg 
-              className="w-4 h-4" 
-              viewBox="0 0 24 24" 
-              fill="currentColor"
-            >
-              <path d="M0 0h11.377v11.372H0zm0 12.628h11.377V24H0zm12.623 0H24V24H12.623zm0-11.372V0H24v11.628H12.623z"/>
-            </svg>
+            
+            <FileStack className="w-4 h-4" />
             Queue Items
           </button>
           <button
@@ -157,7 +152,7 @@ export function Dashboard() {
                 : 'text-slate-600 hover:text-slate-900 hover:bg-white/50'
             }`}
           >
-            <ListTodo className="w-4 h-4" />
+            <AlarmClockCheck className="w-4 h-4" />
             Todo List
           </button>
         </div>
