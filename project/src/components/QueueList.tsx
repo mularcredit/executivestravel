@@ -1,8 +1,11 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
-import { Plus, HandCoins, Tag, AlertCircle, Clock, Trash2, X, Building, Globe, ChevronDown, Upload, FileText, Image, Download, Check, X as XIcon, MessageSquare, User, Shield, Calendar, Filter, Plane, RadioTower, Edit2, Save, ChevronLeft, ChevronRight, Share2, Mail, MessageCircle, Receipt, FileDigit } from 'lucide-react';
+import { Plus, HandCoins, Tag, AlertCircle, Clock, Trash2, X, Building, Globe, ChevronDown, Upload, FileText, Image, Download, Check, X as XIcon, MessageSquare, User, Shield, Calendar, Filter, Plane, RadioTower, Edit2, Save, ChevronLeft, ChevronRight, Share2, Mail, MessageCircle, Receipt, FileDigit, Newspaper, ReceiptText } from 'lucide-react';
 import ReactCountryFlag from 'react-country-flag';
+import html2pdf from 'html2pdf.js';
+
+
 
 // Constants-driven architecture
 const QUEUE_CONSTANTS = {
@@ -211,7 +214,271 @@ const getFileIcon = (fileName: string) => {
   }
 };
 
-// Share Options Component
+
+
+// Updated ExportOptionsModal Component
+// Updated ExportOptionsModal Component
+// ExportOptionsModal Component with proper React image handling
+const ExportOptionsModal = ({ 
+  queue, 
+  onClose 
+}: { 
+  queue: Queue; 
+  onClose: () => void 
+}) => {
+  const [exporting, setExporting] = useState(false);
+
+  const generateVoucher = async () => {
+    setExporting(true);
+    try {
+      // Use the public folder path - in React, public files are served from root
+      const logoPath = '/TULI TRAVEL LOGO.png';
+      
+      // Create HTML content for the voucher
+      const voucherHTML = `
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <style>
+                body {
+                    font-family: 'Arial', sans-serif;
+                    margin: 0;
+                    padding: 20px;
+                    color: #333;
+                }
+                .voucher-container {
+                    max-width: 800px;
+                    margin: 0 auto;
+                    border: 1px solid #cadeffff;
+                    border-radius: 10px;
+                    padding: 30px;
+                    background: white;
+                }
+                .header {
+                    text-align: center;
+                    margin-bottom: 30px;
+                    border-bottom: 2px solid #e2e8f0;
+                    padding-bottom: 20px;
+                    display: flex;
+                    justify-content: center;
+                    align-items: center;
+                }
+                .logo {
+                    max-width: 300px;
+                    height: auto;
+                }
+                .company-name {
+                    font-size: 28px;
+                    font-weight: bold;
+                    color: #1e293b;
+                    margin-bottom: 5px;
+                }
+                .company-tagline {
+                    font-size: 14px;
+                    color: #64748b;
+                }
+                .voucher-title {
+                    text-align: center;
+                    font-size: 24px;
+                    font-weight: bold;
+                    color: #3b82f6;
+                    margin: 20px 0;
+                }
+                .details-grid {
+                    display: grid;
+                    grid-template-columns: 1fr 1fr;
+                    gap: 15px;
+                    margin: 20px 0;
+                }
+                .detail-item {
+                    margin-bottom: 10px;
+                }
+                .detail-label {
+                    font-weight: bold;
+                    color: #475569;
+                    font-size: 12px;
+                    text-transform: uppercase;
+                }
+                .detail-value {
+                    color: #1e293b;
+                    font-size: 14px;
+                }
+                .amount-section {
+                    background: #1e293b;
+                    color: white;
+                    padding: 20px;
+                    border-radius: 8px;
+                    text-align: center;
+                    margin: 20px 0;
+                }
+                .total-amount {
+                    font-size: 32px;
+                    font-weight: bold;
+                    color: #10b981;
+                }
+                .footer {
+                    text-align: center;
+                    margin-top: 30px;
+                    padding-top: 20px;
+                    border-top: 2px solid #e2e8f0;
+                    color: #64748b;
+                    font-size: 12px;
+                }
+                .status-badge {
+                    display: inline-block;
+                    padding: 8px 16px;
+                    background: #10b981;
+                    color: white;
+                    border-radius: 20px;
+                    font-weight: bold;
+                    text-transform: uppercase;
+                    font-size: 12px;
+                }
+            </style>
+        </head>
+        <body>
+            <div class="voucher-container">
+                <div class="header">
+                    <img src="${logoPath}" alt="Tuli Travel Logo" class="logo">
+                </div>
+                
+                <div class="voucher-title"></div>
+                
+                <div class="details-grid">
+                    <div class="detail-item">
+                        <div class="detail-label">Voucher No.</div>
+                        <div class="detail-value">TULI-${queue.id.slice(0, 8).toUpperCase()}</div>
+                    </div>
+                    <div class="detail-item">
+                        <div class="detail-label">Date</div>
+                        <div class="detail-value">${new Date(queue.created_at).toLocaleDateString()}</div>
+                    </div>
+                    <div class="detail-item">
+                        <div class="detail-label">Created By</div>
+                        <div class="detail-value">${queue.user_email || ''}</div>
+                    </div>
+                    <div class="detail-item">
+                        <div class="detail-label">Item</div>
+                        <div class="detail-value">${queue.title}</div>
+                    </div>
+                    <div class="detail-item">
+                        <div class="detail-label">Category</div>
+                        <div class="detail-value">${queue.category.toUpperCase()}</div>
+                    </div>
+                    <div class="detail-item">
+                        <div class="detail-label">Priority</div>
+                        <div class="detail-value">${queue.priority.toUpperCase()}</div>
+                    </div>
+                    <div class="detail-item">
+                        <div class="detail-label">Branch</div>
+                        <div class="detail-value">${queue.branch_name || 'Main Branch'}</div>
+                    </div>
+                    <div class="detail-item">
+                        <div class="detail-label">Country</div>
+                        <div class="detail-value">${getCountryName(queue.country) || 'International'}</div>
+                    </div>
+                </div>
+
+                ${queue.description ? `
+                <div class="detail-item">
+                    <div class="detail-label">Description</div>
+                    <div class="detail-value">${queue.description}</div>
+                </div>
+                ` : ''}
+
+                ${queue.amount ? `
+                <div class="amount-section">
+                    <div style="font-size: 14px; margin-bottom: 10px;">Total Amount</div>
+                    <div class="total-amount">${formatCurrency(queue.amount, queue.currency)}</div>
+                    ${queue.currency !== 'USD' ? 
+                      `<div style="margin-top: 10px; font-size: 14px; color: #94a3b8;">
+                         ≈ $${convertCurrencySync(queue.amount, queue.currency, 'USD').toFixed(2)} USD
+                       </div>` : ''}
+                </div>
+                ` : ''}
+
+               
+
+                <div class="footer">
+                    <div>Tuli Executive Adventures and Travel</div>
+                    <div>Professional & Excellent Customer Experience</div>
+                </div>
+            </div>
+        </body>
+        </html>
+      `;
+
+      // Create a temporary div to hold the HTML
+      const element = document.createElement('div');
+      element.innerHTML = voucherHTML;
+      
+      // PDF options
+      const options = {
+        margin: 10,
+        filename: `Tuli-Travel-Voucher-${queue.id.slice(0, 8)}.pdf`,
+        image: { type: 'jpeg', quality: 0.98 },
+        html2canvas: { 
+          scale: 2,
+          useCORS: true,
+          logging: false
+        },
+        jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' }
+      };
+
+      // Generate and download PDF
+      await html2pdf().set(options).from(element).save();
+      
+      setExporting(false);
+      onClose();
+    } catch (error) {
+      console.error('Error generating PDF:', error);
+      alert('Error generating PDF. Please try again.');
+      setExporting(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+      <div className="bg-white rounded-2xl shadow-xl w-full max-w-sm">
+        <div className="flex justify-between items-center p-6 border-b border-slate-200">
+          <h3 className="text-lg font-semibold text-slate-900">Export Voucher</h3>
+          <button 
+            onClick={onClose}
+            className="text-slate-400 hover:text-slate-600 transition-colors p-1 rounded-lg"
+          >
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+        
+        <div className="p-6">
+          <div className="space-y-3">
+            <button
+              onClick={generateVoucher}
+              disabled={exporting}
+              className="w-full flex items-center justify-center gap-2 bg-blue-500 hover:bg-blue-600 text-white py-3 rounded-xl font-semibold transition-all text-sm disabled:opacity-50"
+            >
+              {exporting ? (
+                <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
+              ) : (
+                <Download className="w-4 h-4" />
+              )}
+              Download Voucher PDF
+            </button>
+          </div>
+          
+          <button
+            onClick={onClose}
+            disabled={exporting}
+            className="w-full mt-4 bg-slate-100 hover:bg-slate-200 text-slate-700 py-3 rounded-xl font-semibold transition-all text-sm disabled:opacity-50"
+          >
+            Cancel
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
+//share options Component
 const ShareOptions = ({ queue, onClose }: { queue: Queue; onClose: () => void }) => {
   const generateShareMessage = () => {
     const amountText = queue.amount 
@@ -917,6 +1184,7 @@ const QueueItem = ({
     country: queue.country || '',
     currency: queue.currency
   });
+  const [showExportModal, setShowExportModal] = useState(false);
 
   const handleEditInputChange = (field: string, value: string) => {
     setEditFormData(prev => ({
@@ -1028,6 +1296,15 @@ const QueueItem = ({
           </h3>
         )}
         <div className="flex items-center gap-1 flex-shrink-0">
+          {/* Export Button */}
+          <button
+            onClick={() => setShowExportModal(true)}
+            className="text-slate-400 hover:text-green-500 transition-all p-1.5 rounded-lg hover:bg-green-50"
+            title="Export Voucher/Invoice"
+          >
+            <ReceiptText className="w-3.5 h-3.5" />
+          </button>
+          
           {/* Share Button */}
           <button
             onClick={() => onShare(queue)}
@@ -1477,6 +1754,14 @@ const QueueItem = ({
           </span>
         </div>
       </div>
+
+      {/* Export Modal */}
+      {showExportModal && (
+        <ExportOptionsModal 
+          queue={queue} 
+          onClose={() => setShowExportModal(false)} 
+        />
+      )}
     </div>
   );
 };
