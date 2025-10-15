@@ -108,7 +108,7 @@ export function TravelAgent() {
         <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full mx-auto overflow-hidden">
           <div className="bg-gradient-to-r from-blue-500 to-blue-600 p-6 text-center">
             <div className="w-16 h-16 mx-auto mb-4 bg-white/20 rounded-full flex items-center justify-center">
-              <img src="../../public/Around-the-World--unscreen.gif" alt="Tuli Travel Logo" className=''></img>
+              <img src="/Around-the-World--unscreen.gif" alt="Tuli Travel Logo" className=''></img>
             </div>
             <h3 className="text-xl font-bold text-white mb-2">Smart Travel Assistant</h3>
             <p className="text-blue-100 text-sm">Analyzing your itinerary...</p>
