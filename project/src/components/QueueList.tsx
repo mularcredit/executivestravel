@@ -1,11 +1,17 @@
+// components/QueueList.tsx
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
-import { Plus, HandCoins, Tag, AlertCircle, Clock, Trash2, X, Building, Globe, ChevronDown, Upload, FileText, Image, Download, Check, X as XIcon, MessageSquare, User, Shield, Calendar, Filter, Plane, RadioTower, Edit2, Save, ChevronLeft, ChevronRight, Share2, Mail, MessageCircle, Receipt, FileDigit, Newspaper, ReceiptText } from 'lucide-react';
+import { Plus, HandCoins, Tag, AlertCircle, Clock, Trash2, X, Building, Globe, ChevronDown, Upload, FileText, Image, Download, Check, X as XIcon, MessageSquare, User, Shield, Calendar, Filter, Plane, RadioTower, Edit2, Save, ChevronLeft, ChevronRight, Share2, Mail, MessageCircle, Receipt, FileDigit, Newspaper, ReceiptText, Bell, Eye, ZoomIn, ZoomOut, RotateCw } from 'lucide-react';
 import ReactCountryFlag from 'react-country-flag';
 import html2pdf from 'html2pdf.js';
 
-
+// Import the new notification components and hooks
+import { useAggressiveNotifications, Queue as QueueType, NotificationPreferences } from '../hooks/useAggressiveNotifications';
+import { UrgentItemsBanner } from './UrgentItemsBanner';
+import { UrgentItemsBadge } from './UrgentItemsBadge';
+import { NotificationPreferences as NotificationPreferencesComponent } from './NotificationPreferences';
+import { DashboardSummary } from '../components/DashboardSummary';
 
 // Constants-driven architecture
 const QUEUE_CONSTANTS = {
@@ -21,7 +27,7 @@ const QUEUE_CONSTANTS = {
     { name: 'Other', code: 'XX' }
   ] as const,
   itemsPerPage: 6,
-  tabs: ['all', 'pending', 'approved', 'rejected', 'amended', 'my-items', 'requires-attention'] as const,
+  tabs: ['all', 'pending', 'approved', 'rejected', 'amended', 'my-items', 'requires-attention', 'trash'] as const,
   viewTabs: ['details', 'receipts'] as const
 } as const;
 
@@ -84,7 +90,7 @@ const getLiveConversionRates = async () => {
   }
 };
 
-const convertCurrency = async (amount, fromCurrency, toCurrency) => {
+const convertCurrency = async (amount: number, fromCurrency: string, toCurrency: string) => {
   if (fromCurrency === toCurrency) return amount;
   
   try {
@@ -92,55 +98,35 @@ const convertCurrency = async (amount, fromCurrency, toCurrency) => {
     
     if (!rates[toCurrency] || !rates[fromCurrency]) {
       console.warn(`Rate not available for ${fromCurrency} or ${toCurrency}, using fallback`);
-      const amountInUSD = amount / FALLBACK_RATES[fromCurrency];
-      return amountInUSD * FALLBACK_RATES[toCurrency];
+      const amountInUSD = amount / FALLBACK_RATES[fromCurrency as keyof typeof FALLBACK_RATES];
+      return amountInUSD * FALLBACK_RATES[toCurrency as keyof typeof FALLBACK_RATES];
     }
     
     const amountInUSD = amount / rates[fromCurrency];
     return amountInUSD * rates[toCurrency];
   } catch (error) {
     console.error('Error converting currency, using fallback:', error);
-    const amountInUSD = amount / FALLBACK_RATES[fromCurrency];
-    return amountInUSD * FALLBACK_RATES[toCurrency];
+    const amountInUSD = amount / FALLBACK_RATES[fromCurrency as keyof typeof FALLBACK_RATES];
+    return amountInUSD * FALLBACK_RATES[toCurrency as keyof typeof FALLBACK_RATES];
   }
 };
 
 // Sync conversion function for immediate use (uses cached rates)
-const convertCurrencySync = (amount, fromCurrency, toCurrency) => {
+const convertCurrencySync = (amount: number, fromCurrency: string, toCurrency: string) => {
   if (fromCurrency === toCurrency) return amount;
   
   const rates = ratesCache.data || FALLBACK_RATES;
   
   if (!rates[toCurrency] || !rates[fromCurrency]) {
-    const amountInUSD = amount / FALLBACK_RATES[fromCurrency];
-    return amountInUSD * FALLBACK_RATES[toCurrency];
+    const amountInUSD = amount / FALLBACK_RATES[fromCurrency as keyof typeof FALLBACK_RATES];
+    return amountInUSD * FALLBACK_RATES[toCurrency as keyof typeof FALLBACK_RATES];
   }
   
   const amountInUSD = amount / rates[fromCurrency];
   return amountInUSD * rates[toCurrency];
 };
 
-type Queue = {
-  id: string;
-  user_id: string;
-  title: string;
-  description: string | null;
-  amount: number | null;
-  category: string;
-  priority: string;
-  status: string;
-  created_at: string;
-  updated_at: string;
-  branch_name: string | null;
-  country: string | null;
-  receipt_url: string | null;
-  receipt_name: string | null;
-  invoice_url: string | null;
-  invoice_name: string | null;
-  currency: string;
-  decisions?: Decision[];
-  user_email?: string; 
-};
+type Queue = QueueType;
 
 type Decision = {
   id: string;
@@ -214,11 +200,326 @@ const getFileIcon = (fileName: string) => {
   }
 };
 
+// Document Viewer Component
+const DocumentViewer = ({ 
+  fileUrl, 
+  fileName, 
+  onClose,
+  onDownload 
+}: { 
+  fileUrl: string; 
+  fileName: string;
+  onClose: () => void;
+  onDownload: () => void;
+}) => {
+  const [zoom, setZoom] = useState(1);
+  const [rotation, setRotation] = useState(0);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
+  const isImage = fileName.match(/\.(jpg|jpeg|png|gif|webp)$/i);
+  const isPDF = fileName.match(/\.(pdf)$/i);
+  const isWord = fileName.match(/\.(doc|docx)$/i);
 
-// Updated ExportOptionsModal Component
-// Updated ExportOptionsModal Component
-// ExportOptionsModal Component with proper React image handling
+  const handleZoomIn = () => {
+    setZoom(prev => Math.min(prev + 0.25, 3));
+  };
+
+  const handleZoomOut = () => {
+    setZoom(prev => Math.max(prev - 0.25, 0.5));
+  };
+
+  const handleRotate = () => {
+    setRotation(prev => (prev + 90) % 360);
+  };
+
+  const handleReset = () => {
+    setZoom(1);
+    setRotation(0);
+  };
+
+  const handleDownload = () => {
+    onDownload();
+    onClose();
+  };
+
+  const renderDocument = () => {
+    if (isImage) {
+      return (
+        <div className="flex items-center justify-center h-full">
+          <img
+            src={fileUrl}
+            alt={fileName}
+            className="max-w-full max-h-full object-contain transition-transform duration-200"
+            style={{ 
+              transform: `scale(${zoom}) rotate(${rotation}deg)`,
+            }}
+            onLoad={() => setLoading(false)}
+            onError={() => setError('Failed to load image')}
+          />
+        </div>
+      );
+    } else if (isPDF) {
+      return (
+        <div className="h-full w-full">
+          <iframe
+            src={fileUrl}
+            className="w-full h-full border-0"
+            onLoad={() => setLoading(false)}
+            onError={() => setError('Failed to load PDF')}
+            title={fileName}
+          />
+        </div>
+      );
+    } else if (isWord) {
+      return (
+        <div className="flex items-center justify-center h-full">
+          <div className="text-center p-8">
+            <FileText className="w-16 h-16 text-slate-400 mx-auto mb-4" />
+            <p className="text-slate-600 mb-4">Word documents can be viewed after download</p>
+            <button
+              onClick={handleDownload}
+              className="bg-blue-500 hover:bg-blue-600 text-white px-6 py-2 rounded-lg font-semibold transition-colors"
+            >
+              Download to View
+            </button>
+          </div>
+        </div>
+      );
+    } else {
+      return (
+        <div className="flex items-center justify-center h-full">
+          <div className="text-center p-8">
+            <FileText className="w-16 h-16 text-slate-400 mx-auto mb-4" />
+            <p className="text-slate-600">This file type can be viewed after download</p>
+          </div>
+        </div>
+      );
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black bg-opacity-90 flex items-center justify-center z-[60] p-4">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-6xl h-[90vh] flex flex-col">
+        {/* Header */}
+        <div className="flex justify-between items-center p-6 border-b border-slate-200 flex-shrink-0">
+          <div className="flex items-center gap-3">
+            {getFileIcon(fileName)}
+            <h3 className="text-lg font-semibold text-slate-900 truncate max-w-md">
+              {fileName}
+            </h3>
+          </div>
+          <div className="flex items-center gap-2">
+            {/* Controls */}
+            {(isImage || isPDF) && (
+              <div className="flex items-center gap-1 bg-slate-100 rounded-lg p-1 mr-2">
+                <button
+                  onClick={handleZoomOut}
+                  disabled={zoom <= 0.5}
+                  className="p-2 text-slate-600 hover:text-slate-800 disabled:opacity-30 disabled:cursor-not-allowed"
+                  title="Zoom Out"
+                >
+                  <ZoomOut className="w-4 h-4" />
+                </button>
+                <span className="text-xs font-medium text-slate-600 min-w-12 text-center">
+                  {Math.round(zoom * 100)}%
+                </span>
+                <button
+                  onClick={handleZoomIn}
+                  disabled={zoom >= 3}
+                  className="p-2 text-slate-600 hover:text-slate-800 disabled:opacity-30 disabled:cursor-not-allowed"
+                  title="Zoom In"
+                >
+                  <ZoomIn className="w-4 h-4" />
+                </button>
+                {isImage && (
+                  <button
+                    onClick={handleRotate}
+                    className="p-2 text-slate-600 hover:text-slate-800"
+                    title="Rotate"
+                  >
+                    <RotateCw className="w-4 h-4" />
+                  </button>
+                )}
+                <button
+                  onClick={handleReset}
+                  className="p-2 text-slate-600 hover:text-slate-800"
+                  title="Reset"
+                >
+                  <RefreshCw className="w-4 h-4" />
+                </button>
+              </div>
+            )}
+            
+            <button
+              onClick={handleDownload}
+              className="flex items-center gap-2 bg-blue-500 hover:bg-blue-600 text-white px-4 py-2 rounded-lg font-semibold transition-colors text-sm"
+            >
+              <Download className="w-4 h-4" />
+              Download
+            </button>
+            <button
+              onClick={onClose}
+              className="p-2 text-slate-400 hover:text-slate-600 transition-colors rounded-lg"
+            >
+              <X className="w-5 h-5" />
+            </button>
+          </div>
+        </div>
+
+        {/* Document Content */}
+        <div className="flex-1 relative overflow-hidden">
+          {loading && !error && (
+            <div className="absolute inset-0 flex items-center justify-center bg-white">
+              <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
+            </div>
+          )}
+          
+          {error ? (
+            <div className="absolute inset-0 flex items-center justify-center bg-white">
+              <div className="text-center">
+                <FileText className="w-16 h-16 text-red-400 mx-auto mb-4" />
+                <p className="text-red-600 font-medium mb-2">Failed to load document</p>
+                <p className="text-slate-500 text-sm">{error}</p>
+                <button
+                  onClick={handleDownload}
+                  className="mt-4 bg-blue-500 hover:bg-blue-600 text-white px-6 py-2 rounded-lg font-semibold transition-colors"
+                >
+                  Download Instead
+                </button>
+              </div>
+            </div>
+          ) : (
+            <div className="h-full w-full bg-slate-50">
+              {renderDocument()}
+            </div>
+          )}
+        </div>
+
+        {/* Footer */}
+        <div className="flex justify-between items-center p-4 border-t border-slate-200 text-xs text-slate-500 flex-shrink-0">
+          <span>Use zoom and rotation controls to inspect the document</span>
+          <span>Press ESC to close</span>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// Add the missing RefreshCw icon component
+const RefreshCw = ({ className }: { className?: string }) => (
+  <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+  </svg>
+);
+
+// Delete Confirmation Modal Component
+const DeleteConfirmationModal = ({ 
+  queue, 
+  onClose, 
+  onDelete 
+}: { 
+  queue: Queue; 
+  onClose: () => void; 
+  onDelete: (permanent: boolean) => void;
+}) => {
+  const [deleting, setDeleting] = useState(false);
+
+  const handleDelete = async (permanent: boolean) => {
+    setDeleting(true);
+    try {
+      await onDelete(permanent);
+      onClose();
+    } catch (error) {
+      console.error('Error deleting item:', error);
+    } finally {
+      setDeleting(false);
+    }
+  };
+
+  const isInTrash = queue.deleted;
+
+  return (
+    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+      <div className="bg-white rounded-2xl shadow-xl w-full max-w-md">
+        <div className="flex justify-between items-center p-6 border-b border-slate-200">
+          <h3 className="text-lg font-semibold text-slate-900">
+            {isInTrash ? 'Permanently Delete Item' : 'Delete Item'}
+          </h3>
+          <button 
+            onClick={onClose}
+            disabled={deleting}
+            className="text-slate-400 hover:text-slate-600 transition-colors p-1 rounded-lg disabled:opacity-50"
+          >
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+        
+        <div className="p-6">
+          <div className="flex items-start gap-3 mb-4">
+            <div className="w-10 h-10 bg-red-100 rounded-xl flex items-center justify-center flex-shrink-0">
+              <Trash2 className="w-5 h-5 text-red-600" />
+            </div>
+            <div>
+              <h4 className="text-sm font-semibold text-slate-900 mb-1">
+                {isInTrash 
+                  ? `Permanently delete "${queue.title}"?` 
+                  : `Delete "${queue.title}"?`
+                }
+              </h4>
+              <p className="text-xs text-slate-600">
+                {isInTrash 
+                  ? "This will permanently delete this item from the system. This action cannot be undone."
+                  : "Are you sure you want to delete this item? You can restore it from trash later."
+                }
+              </p>
+            </div>
+          </div>
+
+          <div className="space-y-3">
+            {!isInTrash && (
+              <button
+                onClick={() => handleDelete(false)}
+                disabled={deleting}
+                className="w-full flex items-center justify-center gap-2 bg-amber-500 hover:bg-amber-600 text-white py-3 rounded-xl font-semibold transition-all text-sm disabled:opacity-50"
+              >
+                {deleting ? (
+                  <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
+                ) : (
+                  <Trash2 className="w-4 h-4" />
+                )}
+                Move to Trash
+              </button>
+            )}
+            
+            <button
+              onClick={() => handleDelete(true)}
+              disabled={deleting}
+              className="w-full flex items-center justify-center gap-2 bg-red-500 hover:bg-red-600 text-white py-3 rounded-xl font-semibold transition-all text-sm disabled:opacity-50"
+            >
+              {deleting ? (
+                <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
+              ) : (
+                <Trash2 className="w-4 h-4" />
+              )}
+              Permanently Delete
+            </button>
+          </div>
+          
+          <button
+            onClick={onClose}
+            disabled={deleting}
+            className="w-full mt-4 bg-slate-100 hover:bg-slate-200 text-slate-700 py-3 rounded-xl font-semibold transition-all text-sm disabled:opacity-50"
+          >
+            Cancel
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// ExportOptionsModal Component
 const ExportOptionsModal = ({ 
   queue, 
   onClose 
@@ -231,10 +532,8 @@ const ExportOptionsModal = ({
   const generateVoucher = async () => {
     setExporting(true);
     try {
-      // Use the public folder path - in React, public files are served from root
       const logoPath = '/TULI TRAVEL LOGO.png';
       
-      // Create HTML content for the voucher
       const voucherHTML = `
         <!DOCTYPE html>
         <html>
@@ -397,8 +696,6 @@ const ExportOptionsModal = ({
                 </div>
                 ` : ''}
 
-               
-
                 <div class="footer">
                     <div>Tuli Executive Adventures and Travel</div>
                     <div>Professional & Excellent Customer Experience</div>
@@ -408,11 +705,9 @@ const ExportOptionsModal = ({
         </html>
       `;
 
-      // Create a temporary div to hold the HTML
       const element = document.createElement('div');
       element.innerHTML = voucherHTML;
       
-      // PDF options
       const options = {
         margin: 10,
         filename: `Tuli-Travel-Voucher-${queue.id.slice(0, 8)}.pdf`,
@@ -425,7 +720,6 @@ const ExportOptionsModal = ({
         jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' }
       };
 
-      // Generate and download PDF
       await html2pdf().set(options).from(element).save();
       
       setExporting(false);
@@ -478,7 +772,8 @@ const ExportOptionsModal = ({
     </div>
   );
 };
-//share options Component
+
+// Share options Component
 const ShareOptions = ({ queue, onClose }: { queue: Queue; onClose: () => void }) => {
   const generateShareMessage = () => {
     const amountText = queue.amount 
@@ -665,58 +960,6 @@ const FormTextarea = ({
   );
 };
 
-// Dashboard Summary Component
-const DashboardSummary = ({ 
-  filteredQueues, 
-  user, 
-  canManageAllQueues 
-}: { 
-  filteredQueues: Queue[];
-  user: any;
-  canManageAllQueues: boolean;
-}) => {
-  const pendingQueues = filteredQueues.filter(queue => queue.status === 'pending');
-  const myPendingQueues = filteredQueues.filter(queue => 
-    queue.user_id === user?.id && queue.status === 'pending'
-  );
-  const highPriorityQueues = filteredQueues.filter(queue => 
-    queue.priority === 'high' && queue.status === 'pending'
-  );
-  const requiresAttentionQueues = filteredQueues.filter(queue => 
-    queue.amount && convertCurrencySync(queue.amount, queue.currency, 'USD') > 500 && queue.status === 'pending'
-  );
-
-  if (canManageAllQueues) return null;
-
-  return (
-    <div className="bg-gradient-to-r from-blue-50 to-indigo-50 border border-blue-200 rounded-xl p-4 mb-6">
-      <h3 className="text-sm font-semibold text-slate-900 mb-3">My Queue Summary</h3>
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <div className="text-center">
-          <div className="text-2xl font-bold text-blue-600">{myPendingQueues.length}</div>
-          <div className="text-xs text-slate-600">My Pending</div>
-        </div>
-        <div className="text-center">
-          <div className="text-2xl font-bold text-amber-600">{highPriorityQueues.filter(q => q.user_id === user?.id).length}</div>
-          <div className="text-xs text-slate-600">High Priority</div>
-        </div>
-        <div className="text-center">
-          <div className="text-2xl font-bold text-purple-600">
-            {requiresAttentionQueues.filter(q => q.user_id === user?.id).length}
-          </div>
-          <div className="text-xs text-slate-600">Requires Attention</div>
-        </div>
-        <div className="text-center">
-          <div className="text-2xl font-bold text-green-600">
-            {filteredQueues.filter(q => q.user_id === user?.id && q.status === 'approved').length}
-          </div>
-          <div className="text-xs text-slate-600">Approved</div>
-        </div>
-      </div>
-    </div>
-  );
-};
-
 // Enhanced Queue Form Modal
 const QueueFormModal = ({ 
   isOpen, 
@@ -746,7 +989,6 @@ const QueueFormModal = ({
     invoice: null as File | null
   });
 
-  // Reset form when modal opens/closes or editingQueue changes
   useEffect(() => {
     if (isOpen) {
       if (editingQueue) {
@@ -918,7 +1160,6 @@ const QueueFormModal = ({
         
         <form onSubmit={handleSubmit} className="p-6">
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            {/* Left Column - Basic Info */}
             <div className="space-y-4">
               <FormInput
                 label="Title"
@@ -936,7 +1177,6 @@ const QueueFormModal = ({
                 placeholder="Add a description (optional)"
               />
 
-              {/* Receipt Upload */}
               <div>
                 <label className="block text-xs font-semibold text-slate-700 mb-1.5">
                   Receipt (Optional)
@@ -989,7 +1229,6 @@ const QueueFormModal = ({
               </div>
             </div>
 
-            {/* Right Column - Details */}
             <div className="space-y-4">
               <div className="grid grid-cols-2 gap-4">
                 <div>
@@ -1035,7 +1274,6 @@ const QueueFormModal = ({
                 />
               </div>
 
-              {/* Branch and Country Fields */}
               <div className="grid grid-cols-2 gap-4">
                 <FormSelect
                   label="Branch"
@@ -1054,7 +1292,6 @@ const QueueFormModal = ({
                 />
               </div>
 
-              {/* Country Preview */}
               {formData.country && formData.country !== 'XX' && formData.country !== 'ALL' && (
                 <div className="pt-2">
                   <label className="block text-xs font-semibold text-slate-700 mb-2">Selected Country</label>
@@ -1067,7 +1304,6 @@ const QueueFormModal = ({
                 </div>
               )}
 
-              {/* Invoice Upload */}
               <div>
                 <label className="block text-xs font-semibold text-slate-700 mb-1.5">
                   Invoice (Optional)
@@ -1121,7 +1357,6 @@ const QueueFormModal = ({
             </div>
           </div>
 
-          {/* Form Actions */}
           <div className="flex gap-3 pt-6 mt-6 border-t border-slate-200">
             <button
               type="submit"
@@ -1144,7 +1379,7 @@ const QueueFormModal = ({
   );
 };
 
-// Enhanced Queue Item Component with Tabs
+// Enhanced Queue Item Component with Tabs and Document Viewer
 const QueueItem = ({ 
   queue, 
   user, 
@@ -1163,7 +1398,7 @@ const QueueItem = ({
   user: any;
   userRole: string;
   onDecision: (queue: Queue, status: 'approved' | 'rejected' | 'amended') => void;
-  onDelete: (id: string) => void;
+  onDelete: (id: string, permanent?: boolean) => void;
   onEdit: (queue: Queue) => void;
   onShare: (queue: Queue) => void;
   onFileUpload: (file: File, queueId: string, field: 'receipt' | 'invoice') => void;
@@ -1185,6 +1420,9 @@ const QueueItem = ({
     currency: queue.currency
   });
   const [showExportModal, setShowExportModal] = useState(false);
+  const [showDeleteModal, setShowDeleteModal] = useState(false);
+  const [showDocumentViewer, setShowDocumentViewer] = useState(false);
+  const [currentDocument, setCurrentDocument] = useState<{url: string; name: string} | null>(null);
 
   const handleEditInputChange = (field: string, value: string) => {
     setEditFormData(prev => ({
@@ -1256,6 +1494,21 @@ const QueueItem = ({
     onFileUpload(file, queue.id, field);
   };
 
+  const handleViewDocument = (url: string, name: string) => {
+    setCurrentDocument({ url, name });
+    setShowDocumentViewer(true);
+  };
+
+  const handleDownloadDocument = (url: string, name: string) => {
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = name;
+    link.target = '_blank';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
   const renderCountryFlag = (countryCode: string, size: string = '1em') => {
     if (!countryCode || countryCode === 'ALL' || countryCode === 'XX') {
       return <Globe className="w-3 h-3" />;
@@ -1280,7 +1533,6 @@ const QueueItem = ({
 
   return (
     <div className="group bg-white/70 backdrop-blur-xl rounded-2xl shadow-md hover:shadow-xl p-5 border border-slate-200/60 transition-all duration-300 hover:scale-[1.02] flex flex-col h-full">
-      {/* Header with title and actions */}
       <div className="flex justify-between items-start mb-3">
         {isEditing ? (
           <input
@@ -1296,7 +1548,6 @@ const QueueItem = ({
           </h3>
         )}
         <div className="flex items-center gap-1 flex-shrink-0">
-          {/* Export Button */}
           <button
             onClick={() => setShowExportModal(true)}
             className="text-slate-400 hover:text-green-500 transition-all p-1.5 rounded-lg hover:bg-green-50"
@@ -1305,7 +1556,6 @@ const QueueItem = ({
             <ReceiptText className="w-3.5 h-3.5" />
           </button>
           
-          {/* Share Button */}
           <button
             onClick={() => onShare(queue)}
             className="text-slate-400 hover:text-blue-500 transition-all p-1.5 rounded-lg hover:bg-blue-50"
@@ -1325,7 +1575,7 @@ const QueueItem = ({
           )}
           {queue.user_id === user?.id && (
             <button
-              onClick={() => onDelete(queue.id)}
+              onClick={() => setShowDeleteModal(true)}
               className="text-slate-400 hover:text-red-500 transition-all p-1.5 rounded-lg hover:bg-red-50"
               title="Delete"
             >
@@ -1335,12 +1585,10 @@ const QueueItem = ({
         </div>
       </div>
 
-      {/* Show creator email for admin/operations */}
       {canManageAllQueues && queue.user_email && (
         <p className="text-xs text-slate-500 mb-2">By: {queue.user_email}</p>
       )}
 
-      {/* View Tabs */}
       <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-xl mb-4">
         {QUEUE_CONSTANTS.viewTabs.map((tab) => (
           <button
@@ -1367,10 +1615,8 @@ const QueueItem = ({
         ))}
       </div>
 
-      {/* Details Tab Content */}
       {activeViewTab === 'details' && (
         <div className="space-y-4 flex-1">
-          {/* Description */}
           {isEditing ? (
             <div>
               <label className="block text-xs font-semibold text-slate-700 mb-2">Description</label>
@@ -1390,9 +1636,7 @@ const QueueItem = ({
             )
           )}
 
-          {/* Editable Fields */}
           <div className="grid grid-cols-2 gap-3">
-            {/* Amount */}
             {isEditing ? (
               <div>
                 <label className="block text-xs font-semibold text-slate-700 mb-2">Amount</label>
@@ -1423,7 +1667,6 @@ const QueueItem = ({
               )
             )}
 
-            {/* Currency */}
             {isEditing && (
               <div>
                 <label className="block text-xs font-semibold text-slate-700 mb-2">Currency</label>
@@ -1440,7 +1683,6 @@ const QueueItem = ({
             )}
           </div>
 
-          {/* Category and Priority */}
           <div className="grid grid-cols-2 gap-3">
             {isEditing ? (
               <>
@@ -1487,7 +1729,6 @@ const QueueItem = ({
             )}
           </div>
 
-          {/* Branch and Country */}
           <div className="grid grid-cols-2 gap-3">
             {isEditing ? (
               <>
@@ -1534,7 +1775,6 @@ const QueueItem = ({
             )}
           </div>
 
-          {/* Edit Actions */}
           {isEditing && (
             <div className="flex gap-2 pt-2">
               <button
@@ -1555,10 +1795,8 @@ const QueueItem = ({
         </div>
       )}
 
-      {/* Receipts & Invoices Tab Content */}
       {activeViewTab === 'receipts' && (
         <div className="space-y-4 flex-1">
-          {/* Receipt Section */}
           <div>
             <h4 className="text-xs font-semibold text-slate-700 mb-2 flex items-center gap-1">
               <Receipt className="w-3 h-3" />
@@ -1573,12 +1811,23 @@ const QueueItem = ({
                   </span>
                 </div>
                 <div className="flex items-center gap-1">
+                  <button
+                    onClick={() => handleViewDocument(queue.receipt_url!, queue.receipt_name || 'receipt')}
+                    className="p-1 text-blue-600 hover:text-blue-800 transition-colors"
+                    title="View receipt"
+                  >
+                    <Eye className="w-3 h-3" />
+                  </button>
                   <a
                     href={queue.receipt_url}
                     target="_blank"
                     rel="noopener noreferrer"
                     className="p-1 text-green-600 hover:text-green-800 transition-colors"
                     title="Download receipt"
+                    onClick={(e) => {
+                      e.preventDefault();
+                      handleDownloadDocument(queue.receipt_url!, queue.receipt_name || 'receipt');
+                    }}
                   >
                     <Download className="w-3 h-3" />
                   </a>
@@ -1611,7 +1860,6 @@ const QueueItem = ({
             )}
           </div>
 
-          {/* Invoice Section */}
           <div>
             <h4 className="text-xs font-semibold text-slate-700 mb-2 flex items-center gap-1">
               <FileDigit className="w-3 h-3" />
@@ -1626,12 +1874,23 @@ const QueueItem = ({
                   </span>
                 </div>
                 <div className="flex items-center gap-1">
+                  <button
+                    onClick={() => handleViewDocument(queue.invoice_url!, queue.invoice_name || 'invoice')}
+                    className="p-1 text-blue-600 hover:text-blue-800 transition-colors"
+                    title="View invoice"
+                  >
+                    <Eye className="w-3 h-3" />
+                  </button>
                   <a
                     href={queue.invoice_url}
                     target="_blank"
                     rel="noopener noreferrer"
                     className="p-1 text-blue-600 hover:text-blue-800 transition-colors"
                     title="Download invoice"
+                    onClick={(e) => {
+                      e.preventDefault();
+                      handleDownloadDocument(queue.invoice_url!, queue.invoice_name || 'invoice');
+                    }}
                   >
                     <Download className="w-3 h-3" />
                   </a>
@@ -1666,7 +1925,6 @@ const QueueItem = ({
         </div>
       )}
 
-      {/* Decision History */}
       {queue.decisions && queue.decisions.length > 0 && activeViewTab === 'details' && (
         <div className="mb-3">
           <div className="text-xs font-semibold text-slate-700 mb-2">Decision History</div>
@@ -1702,9 +1960,7 @@ const QueueItem = ({
         </div>
       )}
 
-      {/* Status buttons and date */}
       <div className="mt-auto pt-3 border-t border-slate-100">
-        {/* Approval/Rejection/Amend buttons for admin/operations */}
         {canApproveReject(userRole) && queue.status === 'pending' && activeViewTab === 'details' && (
           <div className="flex gap-2 mb-3">
             <button
@@ -1725,7 +1981,6 @@ const QueueItem = ({
               Approve
             </button>
             
-            {/* Amend Button */}
             <button
               onClick={() => onDecision(queue, 'amended')}
               className="flex-1 flex items-center justify-center gap-1 py-2 rounded-lg text-xs font-semibold bg-amber-500 hover:bg-amber-600 text-white transition-all hover:scale-105"
@@ -1755,17 +2010,42 @@ const QueueItem = ({
         </div>
       </div>
 
-      {/* Export Modal */}
+      {showDeleteModal && (
+        <DeleteConfirmationModal 
+          queue={queue}
+          onClose={() => setShowDeleteModal(false)}
+          onDelete={(permanent) => {
+            onDelete(queue.id, permanent);
+            setShowDeleteModal(false);
+          }}
+        />
+      )}
+
       {showExportModal && (
         <ExportOptionsModal 
           queue={queue} 
           onClose={() => setShowExportModal(false)} 
         />
       )}
+
+      {showDocumentViewer && currentDocument && (
+        <DocumentViewer
+          fileUrl={currentDocument.url}
+          fileName={currentDocument.name}
+          onClose={() => {
+            setShowDocumentViewer(false);
+            setCurrentDocument(null);
+          }}
+          onDownload={() => handleDownloadDocument(currentDocument.url, currentDocument.name)}
+        />
+      )}
     </div>
   );
 };
 
+// ... (rest of the QueueList component remains the same, just replace the QueueItem component usage)
+
+// MAIN QUEUE LIST COMPONENT
 export function QueueList() {
   const { user } = useAuth();
   const [queues, setQueues] = useState<Queue[]>([]);
@@ -1799,6 +2079,29 @@ export function QueueList() {
   const [priorityFilter, setPriorityFilter] = useState('');
   const [amountFilter, setAmountFilter] = useState('');
 
+  // === NOTIFICATION STATE ===
+  const {
+    permission,
+    audioPermission,
+    acknowledgedItems,
+    preferences,
+    requestNotificationPermission,
+    enableAudioNotifications,
+    checkForUrgentItems,
+    triggerUrgentNotifications,
+    acknowledgeItem,
+    acknowledgeAll,
+    resetAcknowledgedItems,
+    updatePreferences,
+    stopTabAlert,
+  } = useAggressiveNotifications();
+
+  const [showPreferences, setShowPreferences] = useState(false);
+  const [bannerDismissed, setBannerDismissed] = useState(false);
+  const [urgentItems, setUrgentItems] = useState<Queue[]>([]);
+  const [requiresAttention, setRequiresAttention] = useState(false);
+  const [previousUrgentCount, setPreviousUrgentCount] = useState(0);
+
   // Calculate pagination using constants
   const totalPages = Math.ceil(filteredQueues.length / QUEUE_CONSTANTS.itemsPerPage);
   const startIndex = (currentPage - 1) * QUEUE_CONSTANTS.itemsPerPage;
@@ -1808,22 +2111,26 @@ export function QueueList() {
   const applyTabFilter = useCallback((queuesToFilter: Queue[]) => {
     switch (activeTab) {
       case 'pending':
-        return queuesToFilter.filter(queue => queue.status === 'pending');
+        return queuesToFilter.filter(queue => queue.status === 'pending' && !queue.deleted);
       case 'approved':
-        return queuesToFilter.filter(queue => queue.status === 'approved');
+        return queuesToFilter.filter(queue => queue.status === 'approved' && !queue.deleted);
       case 'rejected':
-        return queuesToFilter.filter(queue => queue.status === 'rejected');
+        return queuesToFilter.filter(queue => queue.status === 'rejected' && !queue.deleted);
       case 'amended':
-        return queuesToFilter.filter(queue => queue.status === 'amended');
+        return queuesToFilter.filter(queue => queue.status === 'amended' && !queue.deleted);
       case 'my-items':
-        return queuesToFilter.filter(queue => queue.user_id === user?.id);
+        return queuesToFilter.filter(queue => queue.user_id === user?.id && !queue.deleted);
       case 'requires-attention':
         return queuesToFilter.filter(queue => 
-          (queue.amount && convertCurrencySync(queue.amount, queue.currency, 'USD') > 500 && queue.status === 'pending') || 
-          queue.priority === 'high'
+          queue.status === 'pending' && 
+          !queue.deleted &&
+          ((queue.amount && convertCurrencySync(queue.amount, queue.currency, 'USD') > 500) || 
+           queue.priority === 'high')
         );
+      case 'trash':
+        return queuesToFilter.filter(queue => queue.deleted);
       default:
-        return queuesToFilter;
+        return queuesToFilter.filter(queue => !queue.deleted);
     }
   }, [activeTab, user]);
 
@@ -1835,36 +2142,27 @@ export function QueueList() {
     }
 
     let filtered = [...queues];
-
-    // Apply tab filter first
     filtered = applyTabFilter(filtered);
-
-    // Apply date filter
     filtered = applyDateFilterToQueues(filtered);
 
-    // Apply branch filter
     if (branchFilter && branchFilter !== 'All') {
       filtered = filtered.filter(queue => 
         queue.branch_name?.toLowerCase().includes(branchFilter.toLowerCase())
       );
     }
 
-    // Apply country filter
     if (countryFilter && countryFilter !== 'ALL') {
       filtered = filtered.filter(queue => queue.country === countryFilter);
     }
 
-    // Apply category filter
     if (categoryFilter) {
       filtered = filtered.filter(queue => queue.category === categoryFilter);
     }
 
-    // Apply priority filter
     if (priorityFilter) {
       filtered = filtered.filter(queue => queue.priority === priorityFilter);
     }
 
-    // Apply amount filter
     if (amountFilter) {
       const amount = parseFloat(amountFilter);
       if (!isNaN(amount)) {
@@ -1976,6 +2274,36 @@ export function QueueList() {
 
     return filtered;
   }, [dateFilter, customStartDate, customEndDate]);
+
+  // Urgent items detection with notification triggering
+  useEffect(() => {
+    if (queues.length > 0 && preferences.enabled) {
+      const { urgentItems: detectedUrgent, requiresAttention: needsAttention } = 
+        checkForUrgentItems(queues);
+      
+      setUrgentItems(detectedUrgent);
+      setRequiresAttention(needsAttention);
+      
+      // Reset banner dismissal when new urgent items appear
+      if (detectedUrgent.length > 0 && detectedUrgent.some(item => !acknowledgedItems.has(item.id))) {
+        setBannerDismissed(false);
+      }
+
+      // Trigger notifications when new urgent items are detected
+      if (detectedUrgent.length > 0 && detectedUrgent.length > previousUrgentCount) {
+        triggerUrgentNotifications(detectedUrgent);
+      }
+      
+      setPreviousUrgentCount(detectedUrgent.length);
+    }
+  }, [queues, preferences.enabled, checkForUrgentItems, acknowledgedItems, triggerUrgentNotifications, previousUrgentCount]);
+
+  // Stop tab alerts when component unmounts or user navigates away
+  useEffect(() => {
+    return () => {
+      stopTabAlert();
+    };
+  }, [stopTabAlert]);
 
   // Data fetching
   useEffect(() => {
@@ -2102,7 +2430,7 @@ export function QueueList() {
     }
   };
 
-  // Permission checks - UPDATED WITH CURRENCY CONVERSION
+  // Permission checks
   const canManageAllQueues = useCallback((role = userRole) => {
     return ['admin', 'operations'].includes(role);
   }, [userRole]);
@@ -2114,7 +2442,6 @@ export function QueueList() {
   const canApproveExpense = (amount: number | null, currency: string, role = userRole) => {
     if (!amount) return true;
     
-    // Convert amount to USD for approval limit checking
     let amountInUSD = amount;
     
     if (currency !== 'USD') {
@@ -2148,7 +2475,7 @@ export function QueueList() {
       const { error: queueError } = await supabase
         .from('queues')
         .update({ 
-          status: status === 'amended' ? 'pending' : status, // Keep as pending if amended
+          status: status === 'amended' ? 'pending' : status,
           updated_at: new Date().toISOString() 
         })
         .eq('id', selectedQueue.id);
@@ -2257,6 +2584,7 @@ export function QueueList() {
           receipt_name: null,
           invoice_url: null,
           invoice_name: null,
+          deleted: false,
           created_at: new Date().toISOString(),
           updated_at: new Date().toISOString()
         }])
@@ -2316,39 +2644,53 @@ export function QueueList() {
     }
   };
 
-  const handleDelete = async (id: string) => {
-    if (!confirm('Are you sure you want to delete this item?')) return;
-    
+  const handleDelete = async (id: string, permanent: boolean = false) => {
     try {
-      const { data: queue } = await supabase
-        .from('queues')
-        .select('receipt_url, invoice_url')
-        .eq('id', id)
-        .single();
+      if (permanent) {
+        // Permanent deletion logic
+        const { data: queue } = await supabase
+          .from('queues')
+          .select('receipt_url, invoice_url')
+          .eq('id', id)
+          .single();
 
-      if (queue) {
-        const filesToRemove = [];
-        if (queue.receipt_url) {
-          const fileName = queue.receipt_url.split('/').pop();
-          if (fileName) filesToRemove.push(`${id}/${fileName}`);
-        }
-        if (queue.invoice_url) {
-          const fileName = queue.invoice_url.split('/').pop();
-          if (fileName) filesToRemove.push(`${id}/${fileName}`);
+        if (queue) {
+          const filesToRemove = [];
+          if (queue.receipt_url) {
+            const fileName = queue.receipt_url.split('/').pop();
+            if (fileName) filesToRemove.push(`${id}/${fileName}`);
+          }
+          if (queue.invoice_url) {
+            const fileName = queue.invoice_url.split('/').pop();
+            if (fileName) filesToRemove.push(`${id}/${fileName}`);
+          }
+
+          if (filesToRemove.length > 0) {
+            await supabase.storage
+              .from('receipts')
+              .remove(filesToRemove);
+          }
         }
 
-        if (filesToRemove.length > 0) {
-          await supabase.storage
-            .from('receipts')
-            .remove(filesToRemove);
-        }
+        const { error } = await supabase.from('queues').delete().eq('id', id);
+        if (error) throw error;
+      } else {
+        // Soft delete (move to trash)
+        const { error } = await supabase
+          .from('queues')
+          .update({ 
+            deleted: true,
+            updated_at: new Date().toISOString()
+          })
+          .eq('id', id);
+        
+        if (error) throw error;
       }
-
-      const { error } = await supabase.from('queues').delete().eq('id', id);
-      if (error) throw error;
+      
       fetchQueues();
     } catch (error) {
       console.error('Error deleting queue:', error);
+      alert(`Error ${permanent ? 'permanently deleting' : 'moving to trash'} item. Please try again.`);
     }
   };
 
@@ -2479,41 +2821,79 @@ export function QueueList() {
     </div>
   );
 
-  // Tabs Component
-  const Tabs = () => (
-    <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-xl mb-6">
-      {[
-        { id: 'all', label: 'All Items', count: queues.length },
-        { id: 'pending', label: 'Pending', count: queues.filter(q => q.status === 'pending').length },
-        { id: 'approved', label: 'Approved', count: queues.filter(q => q.status === 'approved').length },
-        { id: 'rejected', label: 'Rejected', count: queues.filter(q => q.status === 'rejected').length },
-        { id: 'amended', label: 'Amended', count: queues.filter(q => q.status === 'amended').length },
-        { id: 'my-items', label: 'My Items', count: queues.filter(q => q.user_id === user?.id).length },
-        { id: 'requires-attention', label: 'Requires Attention', count: queues.filter(q => 
-          (q.amount && convertCurrencySync(q.amount, q.currency, 'USD') > 500 && q.status === 'pending') || q.priority === 'high'
-        ).length },
-      ].map((tab) => (
-        <button
-          key={tab.id}
-          onClick={() => setActiveTab(tab.id as any)}
-          className={`flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-semibold transition-all ${
-            activeTab === tab.id
-              ? 'bg-white text-slate-900 shadow-sm'
-              : 'text-slate-600 hover:text-slate-900'
-          }`}
-        >
-          {tab.label}
-          <span className={`px-1.5 py-0.5 rounded-full text-xs ${
-            activeTab === tab.id
-              ? 'bg-blue-100 text-blue-700'
-              : 'bg-slate-200 text-slate-600'
-          }`}>
-            {tab.count}
-          </span>
-        </button>
-      ))}
-    </div>
-  );
+  // Enhanced Tabs Component with Urgent Badges
+  const Tabs = () => {
+    const getTabCount = (tabId: string) => {
+      const baseCounts = {
+        'all': queues.filter(q => !q.deleted).length,
+        'pending': queues.filter(q => q.status === 'pending' && !q.deleted).length,
+        'approved': queues.filter(q => q.status === 'approved' && !q.deleted).length,
+        'rejected': queues.filter(q => q.status === 'rejected' && !q.deleted).length,
+        'amended': queues.filter(q => q.status === 'amended' && !q.deleted).length,
+        'my-items': queues.filter(q => q.user_id === user?.id && !q.deleted).length,
+        'requires-attention': queues.filter(q => 
+          q.status === 'pending' && 
+          !q.deleted &&
+          ((q.amount && convertCurrencySync(q.amount, q.currency, 'USD') > 500) || q.priority === 'high')
+        ).length,
+        'trash': queues.filter(q => q.deleted).length,
+      };
+
+      return baseCounts[tabId as keyof typeof baseCounts] || 0;
+    };
+
+    const isTabUrgent = (tabId: string) => {
+      if (tabId === 'requires-attention') {
+        return requiresAttention && urgentItems.length > 0;
+      }
+      if (tabId === 'all' || tabId === 'pending') {
+        return requiresAttention;
+      }
+      return false;
+    };
+
+    return (
+      <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-xl mb-6">
+        {[
+          { id: 'all', label: 'All Items' },
+          { id: 'pending', label: 'Pending' },
+          { id: 'approved', label: 'Approved' },
+          { id: 'rejected', label: 'Rejected' },
+          { id: 'amended', label: 'Amended' },
+          { id: 'my-items', label: 'My Items' },
+          { id: 'requires-attention', label: 'Requires Attention' },
+          { id: 'trash', label: 'Trash' },
+        ].map((tab) => {
+          const count = getTabCount(tab.id);
+          const isUrgent = isTabUrgent(tab.id);
+          
+          return (
+            <button
+              key={tab.id}
+              onClick={() => {
+                setActiveTab(tab.id as any);
+                // Stop tab alerts when user actively views urgent items
+                if (tab.id === 'requires-attention') {
+                  stopTabAlert();
+                }
+              }}
+              className={`flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-semibold transition-all ${
+                activeTab === tab.id
+                  ? 'bg-white text-slate-900 shadow-sm'
+                  : 'text-slate-600 hover:text-slate-900'
+              }`}
+            >
+              {tab.label}
+              <UrgentItemsBadge 
+                count={count} 
+                isUrgent={isUrgent && preferences.tiers.visual && preferences.enabled}
+              />
+            </button>
+          );
+        })}
+      </div>
+    );
+  };
 
   // Pagination Component
   const Pagination = () => {
@@ -2797,12 +3177,37 @@ export function QueueList() {
 
   return (
     <div className="space-y-6">
+      {/* === URGENT ITEMS BANNER === */}
+      <UrgentItemsBanner
+        urgentItems={urgentItems}
+        isVisible={
+          preferences.enabled && 
+          preferences.tiers.visual && 
+          requiresAttention && 
+          !bannerDismissed &&
+          urgentItems.length > 0
+        }
+        onAcknowledgeAll={() => {
+          acknowledgeAll(urgentItems);
+          setBannerDismissed(true);
+          stopTabAlert();
+        }}
+        onDismiss={() => setBannerDismissed(true)}
+        onViewUrgent={() => {
+          setActiveTab('requires-attention');
+          stopTabAlert();
+        }}
+        preferences={preferences}
+        onTogglePreferences={() => setShowPreferences(true)}
+      />
+
       <div className="flex justify-between items-center">
         <div>
           <h2 className="text-2xl font-semibold text-slate-900 mb-1">Queue Management</h2>
           <div className="flex items-center gap-2">
             <p className="text-xs text-slate-500">
               {filteredQueues.length} items • {['admin', 'operations'].includes(userRole) ? 'All users' : 'Only your items'}
+              {requiresAttention && ` • ${urgentItems.length} urgent`}
             </p>
             <span className={`inline-flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-semibold border ${getRoleColor(userRole)}`}>
               {getRoleIcon(userRole)}
@@ -2817,6 +3222,19 @@ export function QueueList() {
 
           {/* Date Filter */}
           <DateFilterDropdown />
+
+          {/* Add Settings Button */}
+          <button
+            onClick={() => setShowPreferences(true)}
+            className="flex items-center gap-2 bg-white hover:bg-slate-50 text-slate-700 px-4 py-2.5 rounded-xl font-semibold shadow-md hover:shadow-lg transition-all border border-slate-200 text-xs"
+            title="Notification Settings"
+          >
+            <Bell className={`w-4 h-4 ${requiresAttention ? 'text-red-500 animate-pulse' : ''}`} />
+            Settings
+            {requiresAttention && preferences.enabled && (
+              <span className="w-2 h-2 bg-red-500 rounded-full animate-ping"></span>
+            )}
+          </button>
 
           {/* Clear All Filters Button */}
           {hasActiveFilters() && (
@@ -2839,11 +3257,13 @@ export function QueueList() {
         </div>
       </div>
 
-      {/* Add Dashboard Summary */}
+      {/* Enhanced Dashboard Summary */}
       <DashboardSummary 
         filteredQueues={filteredQueues}
         user={user}
         canManageAllQueues={canManageAllQueues()}
+        urgentItemsCount={urgentItems.length}
+        requiresAttention={requiresAttention}
       />
 
       {/* Tabs */}
@@ -2904,6 +3324,18 @@ export function QueueList() {
           </div>
         </div>
       )}
+
+      {/* Notification Preferences Modal */}
+      <NotificationPreferencesComponent
+        isOpen={showPreferences}
+        onClose={() => setShowPreferences(false)}
+        preferences={preferences}
+        onUpdatePreferences={updatePreferences}
+        onRequestNotificationPermission={requestNotificationPermission}
+        onEnableAudio={enableAudioNotifications}
+        permission={permission}
+        audioPermission={audioPermission}
+      />
 
       {/* Queue Form Modal */}
       <QueueFormModal 

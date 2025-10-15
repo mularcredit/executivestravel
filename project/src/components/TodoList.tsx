@@ -61,6 +61,7 @@ type Todo = {
   completed_at: string | null;
   time_tracked?: number;
   time_entries?: TimeEntry[];
+  chat_messages?: ChatMessage[];
 };
 
 type TimeEntry = {
@@ -69,6 +70,16 @@ type TimeEntry = {
   start_time: string;
   end_time: string | null;
   duration: number;
+};
+
+type ChatMessage = {
+  id: string;
+  todo_id: string;
+  user_id: string;
+  message: string;
+  created_at: string;
+  user_name?: string;
+  user_email?: string;
 };
 
 type Note = {
@@ -220,6 +231,208 @@ const formatTime = (seconds: number) => {
 
 const calculateTotalTrackedTime = (timeEntries: TimeEntry[] = []) => {
   return timeEntries.reduce((total, entry) => total + entry.duration, 0);
+};
+
+// Delete Confirmation Modal Component
+const DeleteConfirmationModal = ({ 
+  todo, 
+  onClose, 
+  onDelete 
+}: { 
+  todo: Todo; 
+  onClose: () => void; 
+  onDelete: (permanent: boolean) => void;
+}) => {
+  const [deleting, setDeleting] = useState(false);
+
+  const handleDelete = async (permanent: boolean) => {
+    setDeleting(true);
+    try {
+      await onDelete(permanent);
+      onClose();
+    } catch (error) {
+      console.error('Error deleting todo:', error);
+    } finally {
+      setDeleting(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+      <div className="bg-white rounded-2xl shadow-xl w-full max-w-md">
+        <div className="flex justify-between items-center p-6 border-b border-slate-200">
+          <h3 className="text-lg font-semibold text-slate-900">Delete Task</h3>
+          <button 
+            onClick={onClose}
+            disabled={deleting}
+            className="text-slate-400 hover:text-slate-600 transition-colors p-1 rounded-lg disabled:opacity-50"
+          >
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+        
+        <div className="p-6">
+          <div className="flex items-start gap-3 mb-4">
+            <div className="w-10 h-10 bg-red-100 rounded-xl flex items-center justify-center flex-shrink-0">
+              <Trash2 className="w-5 h-5 text-red-600" />
+            </div>
+            <div>
+              <h4 className="text-sm font-semibold text-slate-900 mb-1">
+                Delete "{todo.title}"?
+              </h4>
+              <p className="text-xs text-slate-600">
+                Are you sure you want to delete this task? This action cannot be undone.
+              </p>
+            </div>
+          </div>
+
+          <div className="space-y-3">
+            <button
+              onClick={() => handleDelete(true)}
+              disabled={deleting}
+              className="w-full flex items-center justify-center gap-2 bg-red-500 hover:bg-red-600 text-white py-3 rounded-xl font-semibold transition-all text-sm disabled:opacity-50"
+            >
+              {deleting ? (
+                <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
+              ) : (
+                <Trash2 className="w-4 h-4" />
+              )}
+              Delete Task
+            </button>
+          </div>
+          
+          <button
+            onClick={onClose}
+            disabled={deleting}
+            className="w-full mt-4 bg-slate-100 hover:bg-slate-200 text-slate-700 py-3 rounded-xl font-semibold transition-all text-sm disabled:opacity-50"
+          >
+            Cancel
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// Chat Modal Component
+const ChatModal = ({ 
+  isOpen, 
+  onClose, 
+  todo,
+  user,
+  onSendMessage
+}: { 
+  isOpen: boolean;
+  onClose: () => void;
+  todo: Todo | null;
+  user: any;
+  onSendMessage: (todoId: string, message: string) => void;
+}) => {
+  const [message, setMessage] = useState('');
+  const [sending, setSending] = useState(false);
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+
+  const scrollToBottom = () => {
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  };
+
+  useEffect(() => {
+    scrollToBottom();
+  }, [todo?.chat_messages]);
+
+  const handleSendMessage = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!message.trim() || !todo || sending) return;
+
+    setSending(true);
+    try {
+      await onSendMessage(todo.id, message.trim());
+      setMessage('');
+    } catch (error) {
+      console.error('Error sending message:', error);
+    } finally {
+      setSending(false);
+    }
+  };
+
+  if (!isOpen || !todo) return null;
+
+  return (
+    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+      <div className="bg-white rounded-2xl shadow-xl w-full max-w-2xl max-h-[80vh] overflow-y-auto">
+        <div className="flex justify-between items-center p-6 border-b border-slate-200 sticky top-0 bg-white z-10">
+          <div>
+            <h3 className="text-xl font-semibold text-slate-900">Task Discussion</h3>
+            <p className="text-sm text-slate-600">{todo.title}</p>
+          </div>
+          <button 
+            onClick={onClose}
+            className="text-slate-400 hover:text-slate-600 transition-colors p-1 rounded-lg"
+          >
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+        
+        <div className="p-6">
+          {/* Messages */}
+          <div className="space-y-4 mb-6 max-h-96 overflow-y-auto">
+            {todo.chat_messages && todo.chat_messages.length > 0 ? (
+              todo.chat_messages.map((chatMessage) => (
+                <div
+                  key={chatMessage.id}
+                  className={`flex ${chatMessage.user_id === user?.id ? 'justify-end' : 'justify-start'}`}
+                >
+                  <div
+                    className={`max-w-xs lg:max-w-md px-4 py-2 rounded-2xl ${
+                      chatMessage.user_id === user?.id
+                        ? 'bg-blue-500 text-white rounded-br-none'
+                        : 'bg-slate-100 text-slate-900 rounded-bl-none'
+                    }`}
+                  >
+                    <p className="text-sm">{chatMessage.message}</p>
+                    <div className={`text-xs mt-1 ${
+                      chatMessage.user_id === user?.id ? 'text-blue-100' : 'text-slate-500'
+                    }`}>
+                      {chatMessage.user_name || 'Unknown User'} • {new Date(chatMessage.created_at).toLocaleTimeString()}
+                    </div>
+                  </div>
+                </div>
+              ))
+            ) : (
+              <div className="text-center py-8 text-slate-500">
+                <MessageSquare className="w-12 h-12 text-slate-300 mx-auto mb-3" />
+                <p className="text-sm">No messages yet. Start the conversation!</p>
+              </div>
+            )}
+            <div ref={messagesEndRef} />
+          </div>
+
+          {/* Message Input */}
+          <form onSubmit={handleSendMessage} className="flex gap-2">
+            <input
+              type="text"
+              value={message}
+              onChange={(e) => setMessage(e.target.value)}
+              placeholder="Type your message..."
+              className="flex-1 px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all text-sm"
+              disabled={sending}
+            />
+            <button
+              type="submit"
+              disabled={!message.trim() || sending}
+              className="px-6 py-3 bg-blue-500 hover:bg-blue-600 disabled:bg-slate-300 text-white rounded-xl font-semibold transition-all text-sm disabled:cursor-not-allowed"
+            >
+              {sending ? (
+                <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
+              ) : (
+                'Send'
+              )}
+            </button>
+          </form>
+        </div>
+      </div>
+    </div>
+  );
 };
 
 // Simple Form Components
@@ -811,7 +1024,7 @@ const RemindersModal = ({
   );
 };
 
-// TodoFormModal Component
+// TodoFormModal Component with date restriction
 const TodoFormModal = ({ 
   isOpen, 
   onClose, 
@@ -927,6 +1140,9 @@ const TodoFormModal = ({
     label: repeat.charAt(0).toUpperCase() + repeat.slice(1)
   }));
 
+  // Get today's date in YYYY-MM-DD format for the min attribute
+  const today = new Date().toISOString().split('T')[0];
+
   if (!isOpen) return null;
 
   return (
@@ -1038,6 +1254,7 @@ const TodoFormModal = ({
                       type="date"
                       value={formData.due_date}
                       onChange={(e) => handleInputChange('due_date', e.target.value)}
+                      min={today} // This restricts dates to today and future
                       className="w-full pl-9 pr-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all cursor-pointer text-xs"
                     />
                   </div>
@@ -1365,6 +1582,14 @@ export function TodoList() {
   const [showNotesPad, setShowNotesPad] = useState(false);
   const [showReminders, setShowReminders] = useState(false);
   
+  // Chat state
+  const [showChat, setShowChat] = useState(false);
+  const [selectedTodoForChat, setSelectedTodoForChat] = useState<Todo | null>(null);
+  
+  // Delete confirmation state
+  const [showDeleteModal, setShowDeleteModal] = useState(false);
+  const [todoToDelete, setTodoToDelete] = useState<Todo | null>(null);
+  
   // Filter states
   const [dateFilter, setDateFilter] = useState('all');
   const [customStartDate, setCustomStartDate] = useState('');
@@ -1561,6 +1786,9 @@ export function TodoList() {
         startTime,
         entryId: data.id
       });
+      
+      // Auto-start timer after task creation
+      fetchTodos(); // Refresh to update UI
     } catch (error) {
       console.error('Error starting timer:', error);
     }
@@ -1612,12 +1840,82 @@ export function TodoList() {
     setShowTimeTracking(true);
   }, [fetchTimeEntries]);
 
+  // Chat functions
+  const fetchChatMessages = useCallback(async (todoId: string) => {
+    try {
+      const { data: messages, error } = await supabase
+        .from('chat_messages')
+        .select('*')
+        .eq('todo_id', todoId)
+        .order('created_at', { ascending: true });
+
+      if (error) throw error;
+
+      // Fetch user names for messages
+      const messagesWithUserNames = await Promise.all(
+        (messages || []).map(async (message) => {
+          try {
+            const { data: userData } = await supabase
+              .from('profiles')
+              .select('full_name, name, email')
+              .eq('id', message.user_id)
+              .single();
+
+            return {
+              ...message,
+              user_name: userData?.full_name || userData?.name || userData?.email?.split('@')[0] || 'Unknown User',
+              user_email: userData?.email
+            };
+          } catch (error) {
+            return {
+              ...message,
+              user_name: 'Unknown User'
+            };
+          }
+        })
+      );
+
+      return messagesWithUserNames;
+    } catch (error) {
+      console.error('Error fetching chat messages:', error);
+      return [];
+    }
+  }, []);
+
+  const sendChatMessage = useCallback(async (todoId: string, message: string) => {
+    if (!user) return;
+
+    try {
+      const { error } = await supabase
+        .from('chat_messages')
+        .insert([{
+          todo_id: todoId,
+          user_id: user.id,
+          message: message.trim(),
+          created_at: new Date().toISOString()
+        }]);
+
+      if (error) throw error;
+
+      // Refresh the todo with updated chat messages
+      fetchTodos();
+    } catch (error) {
+      console.error('Error sending chat message:', error);
+      throw error;
+    }
+  }, [user]);
+
+  const openChat = useCallback(async (todo: Todo) => {
+    setSelectedTodoForChat(todo);
+    setShowChat(true);
+  }, []);
+
   // Memoized handlers
   const handleFormSubmit = useCallback(async (formData: FormData) => {
     if (!user) return;
 
     try {
-      const { error } = await supabase.from('todos').insert([{
+      const { data, error } = await supabase.from('todos').insert([{
         user_id: user.id,
         title: formData.title,
         priority: formData.priority,
@@ -1632,15 +1930,20 @@ export function TodoList() {
         completed: false,
         completed_comment: null,
         completed_at: null
-      }]);
+      }]).select().single();
 
       if (error) throw error;
+
+      // Auto-start timer after task creation
+      if (data) {
+        await startTimer(data.id);
+      }
 
       fetchTodos();
     } catch (error) {
       console.error('Error creating todo:', error);
     }
-  }, [user]);
+  }, [user, startTimer]);
 
   const handleUpdateTodo = useCallback(async (id: string, formData: FormData) => {
     try {
@@ -1910,7 +2213,7 @@ export function TodoList() {
 
       if (error) throw error;
 
-      // Fetch user names for todos and time entries
+      // Fetch user names for todos and time entries and chat messages
       const todosWithUserNamesAndTime = await Promise.all(
         (data || []).map(async (todo) => {
           try {
@@ -1988,6 +2291,14 @@ export function TodoList() {
               console.error('Error fetching time entries:', timeError);
             }
 
+            // Fetch chat messages for this todo
+            let chatMessages: ChatMessage[] = [];
+            try {
+              chatMessages = await fetchChatMessages(todo.id);
+            } catch (chatError) {
+              console.error('Error fetching chat messages:', chatError);
+            }
+
             return {
               ...todo,
               user_name: creatorName,
@@ -2000,7 +2311,8 @@ export function TodoList() {
               completed_comment: todo.completed_comment || null,
               completed_at: todo.completed_at || null,
               time_tracked: totalTimeTracked,
-              time_entries: timeEntries
+              time_entries: timeEntries,
+              chat_messages: chatMessages
             };
           } catch (error) {
             console.error('Error fetching user data for todo:', error);
@@ -2015,7 +2327,8 @@ export function TodoList() {
               completed_comment: todo.completed_comment || null,
               completed_at: todo.completed_at || null,
               time_tracked: 0,
-              time_entries: []
+              time_entries: [],
+              chat_messages: []
             };
           }
         })
@@ -2041,6 +2354,11 @@ export function TodoList() {
   const canDeleteTask = useCallback((todo: Todo, role = userRole) => {
     if (['admin', 'operations'].includes(role)) return true;
     return todo.user_id === user?.id;
+  }, [userRole, user]);
+
+  const canCompleteTask = useCallback((todo: Todo, role = userRole) => {
+    if (['admin', 'operations'].includes(role)) return true;
+    return todo.user_id === user?.id || todo.assigned_to === user?.id;
   }, [userRole, user]);
 
   // Notes and Reminders handlers
@@ -2259,13 +2577,11 @@ export function TodoList() {
     }
   }, [completingTodoId, activeTimer, stopTimer]);
 
-  const handleDelete = useCallback(async (id: string) => {
+  const handleDelete = useCallback(async (id: string, permanent: boolean = true) => {
     if (activeTimer?.todoId === id) {
       await stopTimer();
     }
 
-    if (!confirm('Are you sure you want to delete this task?')) return;
-    
     try {
       const { error } = await supabase.from('todos').delete().eq('id', id);
       if (error) throw error;
@@ -2321,6 +2637,12 @@ export function TodoList() {
     } catch (error) {
       console.error('Error updating status:', error);
     }
+  }, []);
+
+  // Delete confirmation handler
+  const confirmDelete = useCallback((todo: Todo) => {
+    setTodoToDelete(todo);
+    setShowDeleteModal(true);
   }, []);
 
   // UI Components
@@ -2685,6 +3007,7 @@ export function TodoList() {
     const isAssignedToMe = todo.assigned_to === user?.id;
     const isCreatedByMe = todo.user_id === user?.id;
     const isTimerRunning = activeTimer?.todoId === todo.id;
+    const canComplete = canCompleteTask(todo, userRole);
     
     return (
       <div
@@ -2698,12 +3021,14 @@ export function TodoList() {
         <div className="flex justify-between items-start mb-3">
           <div className="flex items-center gap-2 flex-1 pr-2">
             <button
-              onClick={() => toggleComplete(todo.id, todo.completed)}
+              onClick={() => canComplete && toggleComplete(todo.id, todo.completed)}
               className={`flex-shrink-0 transition-all transform hover:scale-110 ${
+                !canComplete ? 'cursor-not-allowed opacity-50' :
                 todo.completed 
                   ? 'text-green-500 hover:text-slate-400' 
                   : 'text-slate-300 hover:text-blue-600'
               }`}
+              title={!canComplete ? "Only task creator or admin can complete this task" : todo.completed ? "Mark as incomplete" : "Mark as complete"}
             >
               {todo.completed ? (
                 <Check className="w-5 h-5" strokeWidth={2.5} />
@@ -2737,6 +3062,15 @@ export function TodoList() {
             </div>
           </div>
           <div className="flex items-center gap-1">
+            {/* Chat Button */}
+            <button
+              onClick={() => openChat(todo)}
+              className="text-slate-400 hover:text-blue-500 transition-all p-1.5 rounded-lg hover:bg-blue-50 opacity-0 group-hover:opacity-100 flex-shrink-0"
+              title="Open chat"
+            >
+              <MessageSquare className="w-3.5 h-3.5" />
+            </button>
+
             {/* Time Tracking Button */}
             <button
               onClick={() => showTimeTrackingForTodo(todo)}
@@ -2791,7 +3125,7 @@ export function TodoList() {
             </button>
             {canDeleteTask(todo) && (
               <button
-                onClick={() => handleDelete(todo.id)}
+                onClick={() => confirmDelete(todo)}
                 className="text-slate-400 hover:text-red-500 transition-all p-1.5 rounded-lg hover:bg-red-50 opacity-0 group-hover:opacity-100 flex-shrink-0"
                 title="Delete task"
               >
@@ -2926,6 +3260,27 @@ export function TodoList() {
                 Completed on {new Date(todo.completed_at).toLocaleDateString()}
               </p>
             )}
+          </div>
+        )}
+
+        {/* Chat Preview */}
+        {todo.chat_messages && todo.chat_messages.length > 0 && (
+          <div className="mb-3 p-3 bg-blue-50 border border-blue-200 rounded-lg">
+            <div className="flex items-center gap-2 mb-1">
+              <MessageSquare className="w-3 h-3 text-blue-600" />
+              <span className="text-xs font-semibold text-blue-700">
+                Discussion ({todo.chat_messages.length} messages)
+              </span>
+            </div>
+            <p className="text-xs text-blue-600 line-clamp-2">
+              {todo.chat_messages[todo.chat_messages.length - 1].message}
+            </p>
+            <button
+              onClick={() => openChat(todo)}
+              className="text-xs text-blue-500 hover:text-blue-700 font-medium mt-1"
+            >
+              View conversation
+            </button>
           </div>
         )}
 
@@ -3136,6 +3491,7 @@ export function TodoList() {
         </div>
       )}
 
+      {/* Modals */}
       <TodoFormModal 
         isOpen={showForm}
         onClose={closeForm}
@@ -3165,6 +3521,32 @@ export function TodoList() {
         todo={selectedTodoForTime}
         timeEntries={timeEntries}
       />
+
+      <ChatModal
+        isOpen={showChat}
+        onClose={() => {
+          setShowChat(false);
+          setSelectedTodoForChat(null);
+        }}
+        todo={selectedTodoForChat}
+        user={user}
+        onSendMessage={sendChatMessage}
+      />
+
+      {showDeleteModal && todoToDelete && (
+        <DeleteConfirmationModal 
+          todo={todoToDelete}
+          onClose={() => {
+            setShowDeleteModal(false);
+            setTodoToDelete(null);
+          }}
+          onDelete={(permanent) => {
+            handleDelete(todoToDelete.id, permanent);
+            setShowDeleteModal(false);
+            setTodoToDelete(null);
+          }}
+        />
+      )}
 
       <NotesPadModal
         isOpen={showNotesPad}

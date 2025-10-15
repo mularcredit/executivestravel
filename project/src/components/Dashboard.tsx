@@ -2,15 +2,18 @@ import { useState } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { QueueList } from './QueueList';
 import { TodoList } from './TodoList';
-import { LogOut, ListTodo, User, ChevronDown, Settings, Shield, FileStack, AlarmClockCheck } from 'lucide-react';
+import { TravelAgent } from './GenerateTicket'; // Import the TravelAgent component
+import { LogOut, ListTodo, User, ChevronDown, Settings, Shield, FileStack, AlarmClockCheck, Plane, Bell } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
+import { CheckInManager } from './checkInManager';
 
-type View = 'queues' | 'todos';
+type View = 'queues' | 'todos' | 'travel' | 'checkins'; // Add travel to the view types
 
 export function Dashboard() {
   const { user, signOut, isAdmin } = useAuth();
   const [activeView, setActiveView] = useState<View>('queues');
   const [showUserMenu, setShowUserMenu] = useState(false);
+  
   const navigate = useNavigate();
 
   const handleSignOut = async () => {
@@ -140,7 +143,6 @@ export function Dashboard() {
                 : 'text-slate-600 hover:text-slate-900 hover:bg-white/50'
             }`}
           >
-            
             <FileStack className="w-4 h-4" />
             Queue Items
           </button>
@@ -155,10 +157,35 @@ export function Dashboard() {
             <AlarmClockCheck className="w-4 h-4" />
             Todo List
           </button>
+          <button
+            onClick={() => setActiveView('travel')}
+            className={`flex items-center gap-2 px-5 py-2.5 rounded-xl font-semibold text-sm transition-all ${
+              activeView === 'travel'
+                ? 'bg-white text-blue-600 shadow-md scale-105'
+                : 'text-slate-600 hover:text-slate-900 hover:bg-white/50'
+            }`}
+          >
+            <Plane className="w-4 h-4" />
+            Travel Parser
+          </button>
+          <button
+  onClick={() => setActiveView('checkins')}
+  className={`flex items-center gap-2 px-5 py-2.5 rounded-xl font-semibold text-sm transition-all ${
+    activeView === 'checkins'
+      ? 'bg-white text-blue-600 shadow-md scale-105'
+      : 'text-slate-600 hover:text-slate-900 hover:bg-white/50'
+  }`}
+>
+  <Bell className="w-4 h-4" />
+  Check-ins
+</button>
         </div>
 
         <div className="transition-all duration-300">
-          {activeView === 'queues' ? <QueueList /> : <TodoList />}
+          {activeView === 'queues' && <QueueList />}
+          {activeView === 'todos' && <TodoList />}
+          {activeView === 'travel' && <TravelAgent />}
+          {activeView === 'checkins' && <CheckInManager />}
         </div>
       </div>
     </div>
