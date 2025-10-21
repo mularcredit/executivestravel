@@ -3,11 +3,12 @@ import { useAuth } from '../contexts/AuthContext';
 import { QueueList } from './QueueList';
 import { TodoList } from './TodoList';
 import { TravelAgent } from './GenerateTicket'; // Import the TravelAgent component
-import { LogOut, ListTodo, User, ChevronDown, Settings, Shield, FileStack, AlarmClockCheck, Plane, Bell } from 'lucide-react';
+import { LogOut, ListTodo, User, ChevronDown, Settings, Shield, FileStack, AlarmClockCheck, Plane, Bell, UserPlus } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { CheckInManager } from './checkInManager';
+import { ClientManagement } from './clientData';
 
-type View = 'queues' | 'todos' | 'travel' | 'checkins'; // Add travel to the view types
+type View = 'queues' | 'todos' | 'travel' | 'checkins' | 'passenger'; // Add travel to the view types
 
 export function Dashboard() {
   const { user, signOut, isAdmin } = useAuth();
@@ -179,6 +180,17 @@ export function Dashboard() {
   <Bell className="w-4 h-4" />
   Check-ins
 </button>
+ <button
+  onClick={() => setActiveView('passenger')}
+  className={`flex items-center gap-2 px-5 py-2.5 rounded-xl font-semibold text-sm transition-all ${
+    activeView === 'passenger'
+      ? 'bg-white text-blue-600 shadow-md scale-105'
+      : 'text-slate-600 hover:text-slate-900 hover:bg-white/50'
+  }`}
+>
+  <UserPlus className="w-4 h-4" />
+  Passangers
+</button>
         </div>
 
         <div className="transition-all duration-300">
@@ -186,6 +198,7 @@ export function Dashboard() {
           {activeView === 'todos' && <TodoList />}
           {activeView === 'travel' && <TravelAgent />}
           {activeView === 'checkins' && <CheckInManager />}
+          {activeView === 'passenger' && <ClientManagement />}
         </div>
       </div>
     </div>
