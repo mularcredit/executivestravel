@@ -1,11 +1,11 @@
 // components/TravelAgent.tsx
-import { useState, useRef } from 'react';
+import { useState, useRef, useCallback } from 'react';
 import { 
-  Plane, Ticket, Download, Upload, FileText, Calendar, 
-  MapPin, User, Clock, CreditCard, Sparkles, Copy,
-  ArrowRight, Globe, Building2, Luggage, Coffee,
+  Plane, Ticket, FileText, Calendar, 
+  User, Clock, CreditCard, Sparkles, Copy,
+  ArrowRight, Building2, Coffee,
   AlertCircle, Bell, Share2, CheckCircle, Loader2,
-  Receipt
+  Receipt, X
 } from 'lucide-react';
 import html2pdf from 'html2pdf.js';
 import { parseTravelWithAI, type AIParsingResult } from '../routes/aiperser';
@@ -35,7 +35,223 @@ interface TravelRecord {
   contact_info?: string;
 }
 
+interface ReminderSettings {
+  contactPerson: string;
+  branch: 'Kenya' | 'Juba';
+}
+
 type ParsingState = 'idle' | 'starting' | 'preparing' | 'almost_there' | 'complete' | 'error';
+
+// NEW: Separate ReminderPopup component to prevent re-renders
+interface ReminderPopupProps {
+  isOpen: boolean;
+  onClose: () => void;
+  onSave: (settings: ReminderSettings) => void;
+  saving: boolean;
+  initialSettings: ReminderSettings;
+}
+
+const ReminderPopup: React.FC<ReminderPopupProps> = ({ 
+  isOpen, 
+  onClose, 
+  onSave, 
+  saving,
+  initialSettings 
+}) => {
+  const [reminderSettings, setReminderSettings] = useState<ReminderSettings>(initialSettings);
+  const contactPersonInputRef = useRef<HTMLInputElement>(null);
+
+  // Reset settings when popup opens
+  useState(() => {
+    if (isOpen) {
+      setReminderSettings(initialSettings);
+      // Focus input after a short delay to ensure popup is rendered
+      setTimeout(() => {
+        contactPersonInputRef.current?.focus();
+      }, 100);
+    }
+  });
+
+  const handleContactPersonChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setReminderSettings(prev => ({
+      ...prev,
+      contactPerson: e.target.value
+    }));
+  };
+
+  const handleBranchChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
+    setReminderSettings(prev => ({
+      ...prev,
+      branch: e.target.value as 'Kenya' | 'Juba'
+    }));
+  };
+
+  const handleSave = () => {
+    onSave(reminderSettings);
+  };
+
+  if (!isOpen) return null;
+
+  return (
+    <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+      <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full mx-auto">
+        <div className="flex items-center justify-between p-6 border-b border-slate-200">
+          <div className="flex items-center gap-3">
+            <Bell className="w-6 h-6 text-blue-600" />
+            <h3 className="text-xl font-bold text-slate-900">Enable Reminders</h3>
+          </div>
+          <button
+            onClick={onClose}
+            className="p-2 hover:bg-slate-100 rounded-lg transition-colors"
+          >
+            <X className="w-5 h-5 text-slate-500" />
+          </button>
+        </div>
+
+        <div className="p-6 space-y-6">
+          <div>
+            <label className="block text-sm font-medium text-slate-700 mb-2">
+              Contact Person Name
+            </label>
+            <input
+              ref={contactPersonInputRef}
+              type="text"
+              value={reminderSettings.contactPerson}
+              onChange={handleContactPersonChange}
+              placeholder="Enter contact person name"
+              className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all placeholder:text-slate-400 text-sm"
+            />
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-slate-700 mb-2">
+              Branch
+            </label>
+            <select
+              value={reminderSettings.branch}
+              onChange={handleBranchChange}
+              className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all text-sm"
+            >
+              <option value="Kenya">Kenya</option>
+              <option value="Juba">Juba</option>
+            </select>
+          </div>
+
+          <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+            <div className="flex items-center gap-2 mb-2">
+              <Bell className="w-4 h-4 text-blue-600" />
+              <span className="text-sm font-semibold text-blue-800">Reminder Settings</span>
+            </div>
+            <div className="text-xs text-blue-700 space-y-1">
+              <div>• Contact: {reminderSettings.contactPerson || 'Not specified'}</div>
+              <div>• Branch: {reminderSettings.branch}</div>
+              <div>• Check-in alerts 24h & 3h before departure</div>
+              <div>• Browser & desktop notifications</div>
+            </div>
+          </div>
+        </div>
+
+        <div className="flex gap-3 p-6 border-t border-slate-200">
+          <button
+            onClick={onClose}
+            className="flex-1 bg-slate-100 hover:bg-slate-200 text-slate-700 px-6 py-3 rounded-xl font-semibold transition-all text-sm"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={handleSave}
+            disabled={saving}
+            className="flex-1 flex items-center justify-center gap-2 bg-blue-500 hover:bg-blue-600 disabled:bg-slate-400 text-white px-6 py-3 rounded-xl font-semibold transition-all text-sm"
+          >
+            {saving ? (
+              <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
+            ) : (
+              <Bell className="w-4 h-4" />
+            )}
+            {saving ? 'Saving...' : 'Enable Reminders'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// NEW: Separate DuplicateWarningPopup component
+interface DuplicateWarningPopupProps {
+  isOpen: boolean;
+  onClose: () => void;
+  onSaveAnyway: () => void;
+  existingRecords: TravelRecord[];
+}
+
+const DuplicateWarningPopup: React.FC<DuplicateWarningPopupProps> = ({ 
+  isOpen, 
+  onClose, 
+  onSaveAnyway,
+  existingRecords 
+}) => {
+  if (!isOpen) return null;
+
+  return (
+    <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+      <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full mx-auto">
+        <div className="flex items-center justify-between p-6 border-b border-slate-200">
+          <div className="flex items-center gap-3">
+            <AlertCircle className="w-6 h-6 text-amber-600" />
+            <h3 className="text-xl font-bold text-slate-900">Duplicate Flight Found</h3>
+          </div>
+          <button
+            onClick={onClose}
+            className="p-2 hover:bg-slate-100 rounded-lg transition-colors"
+          >
+            <X className="w-5 h-5 text-slate-500" />
+          </button>
+        </div>
+
+        <div className="p-6">
+          <div className="bg-amber-50 border border-amber-200 rounded-lg p-4 mb-4">
+            <p className="text-sm text-amber-800">
+              We found {existingRecords.length} flight(s) that already exist in your records. 
+              Would you like to save anyway or update the existing records?
+            </p>
+          </div>
+          
+          <div className="space-y-3 max-h-60 overflow-y-auto">
+            {existingRecords.map((record, index) => (
+              <div key={index} className="bg-slate-50 rounded-lg p-3 border border-slate-200">
+                <div className="text-sm font-semibold text-slate-900">
+                  {record.airline_name} {record.flight_number}
+                </div>
+                <div className="text-xs text-slate-600">
+                  {record.passenger_name} • {record.departure_date} • {record.departure_airport} → {record.arrival_airport}
+                </div>
+                <div className="text-xs text-slate-500 mt-1">
+                  Added: {record.created_at ? new Date(record.created_at).toLocaleDateString() : 'Unknown date'}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div className="flex gap-3 p-6 border-t border-slate-200">
+          <button
+            onClick={onClose}
+            className="flex-1 bg-slate-100 hover:bg-slate-200 text-slate-700 px-6 py-3 rounded-xl font-semibold transition-all text-sm"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={onSaveAnyway}
+            className="flex-1 flex items-center justify-center gap-2 bg-amber-500 hover:bg-amber-600 text-white px-6 py-3 rounded-xl font-semibold transition-all text-sm"
+          >
+            <Bell className="w-4 h-4" />
+            Save Anyway
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
 
 export function TravelAgent() {
   const [inputText, setInputText] = useState('');
@@ -47,17 +263,30 @@ export function TravelAgent() {
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [savedRecord, setSavedRecord] = useState<TravelRecord | null>(null);
+  const [showReminderPopup, setShowReminderPopup] = useState(false);
+  const [reminderSettings, setReminderSettings] = useState<ReminderSettings>({
+    contactPerson: '',
+    branch: 'Kenya'
+  });
+  const [duplicateCheck, setDuplicateCheck] = useState<{
+    isDuplicate: boolean;
+    existingRecords: TravelRecord[];
+  }>({
+    isDuplicate: false,
+    existingRecords: []
+  });
 
   const resultsSectionRef = useRef<HTMLDivElement>(null);
 
-  const scrollToResults = () => {
+  // Fixed: Stable callback that doesn't cause re-renders
+  const scrollToResults = useCallback(() => {
     setTimeout(() => {
       resultsSectionRef.current?.scrollIntoView({ 
         behavior: 'smooth',
         block: 'start'
       });
     }, 100);
-  };
+  }, []);
 
   const handleParse = async () => {
     if (!inputText.trim()) return;
@@ -100,7 +329,75 @@ export function TravelAgent() {
     }
   };
 
-  const ParsingModal = () => {
+  // NEW: Check for duplicates before saving
+  // In the handleEnableReminders function, update the duplicate check:
+const handleEnableReminders = async () => {
+  if (!itinerary || !itinerary.flights.length) return;
+  
+  setSaving(true);
+  setError(null);
+  
+  try {
+    // Get the current authenticated user
+    const { data: { user } } = await supabase.auth.getUser();
+    
+    if (!user) {
+      setError('You must be logged in to save travel records');
+      setSaving(false);
+      return;
+    }
+
+    const existingRecords: TravelRecord[] = [];
+    
+    // Check each flight for duplicates
+    for (const flight of itinerary.flights) {
+      const { data, error } = await supabase
+        .from('travel_records')
+        .select('*')
+        .eq('user_id', user.id) // Add user filter
+        .eq('passenger_name', itinerary.passengerName || 'Unknown Passenger')
+        .eq('flight_number', flight.flightNumber)
+        .eq('departure_date', flight.departureDate)
+        .eq('departure_airport', flight.departureAirport)
+        .eq('arrival_airport', flight.arrivalAirport);
+
+      if (error) {
+        console.error('Error checking duplicates:', error);
+        continue;
+      }
+      
+      if (data && data.length > 0) {
+        existingRecords.push(...data);
+      }
+    }
+    
+    if (existingRecords.length > 0) {
+      // Found duplicates - show warning
+      setDuplicateCheck({
+        isDuplicate: true,
+        existingRecords
+      });
+    } else {
+      // No duplicates - show reminder popup directly
+      setShowReminderPopup(true);
+    }
+    
+  } catch (error) {
+    console.error('Error checking duplicates:', error);
+    setError('Failed to check for existing records');
+  } finally {
+    setSaving(false);
+  }
+};
+
+  // NEW: Handle reminder popup save
+  const handleReminderSave = async (settings: ReminderSettings) => {
+    setReminderSettings(settings);
+    await saveToSupabase(settings);
+  };
+
+  // Fixed: Memoized parsing modal to prevent re-renders
+  const ParsingModal = useCallback(() => {
     if (!parsing) return null;
 
     return (
@@ -108,7 +405,7 @@ export function TravelAgent() {
         <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full mx-auto overflow-hidden">
           <div className="bg-gradient-to-r from-blue-500 to-blue-600 p-6 text-center">
             <div className="w-16 h-16 mx-auto mb-4 bg-white/20 rounded-full flex items-center justify-center">
-              <img src="/Around-the-World--unscreen.gif" alt="Tuli Travel Logo" className=''></img>
+              <img src="/Around-the-World--unscreen.gif" alt="Tuli Travel Logo" />
             </div>
             <h3 className="text-xl font-bold text-white mb-2">Smart Travel Assistant</h3>
             <p className="text-blue-100 text-sm">Analyzing your itinerary...</p>
@@ -233,55 +530,101 @@ export function TravelAgent() {
         </div>
       </div>
     );
-  };
+  }, [parsing, parsingState]);
 
-  const saveToSupabase = async () => {
-    if (!itinerary || !itinerary.flights.length) return;
+const saveToSupabase = async (settings?: ReminderSettings) => {
+  if (!itinerary || !itinerary.flights.length) return;
+  
+  setSaving(true);
+  setError(null);
+  
+  try {
+    // Get the current authenticated user
+    const { data: { user } } = await supabase.auth.getUser();
     
-    setSaving(true);
-    try {
-      const travelRecords: Omit<TravelRecord, 'id' | 'created_at'>[] = itinerary.flights.map(flight => {
-        return {
-          passenger_name: itinerary.passengerName || 'Unknown Passenger',
-          pnr: itinerary.pnr || 'UNKNOWN',
-          departure_date: flight.departureDate,
-          departure_time: flight.departureTime,
-          departure_airport: flight.departureAirport,
-          arrival_airport: flight.arrivalAirport,
-          airline_name: flight.airlineName,
-          flight_number: flight.flightNumber,
-          checkin_24h_alert: false,
-          checkin_3h_alert: false,
-          checkin_completed: false,
-          raw_itinerary: itinerary.rawText,
-          contact_info: ''
-        };
-      });
-
-      const { data, error } = await supabase
-        .from('travel_records')
-        .insert(travelRecords)
-        .select();
-
-      if (error) throw error;
-
-      setSavedRecord(data[0]);
-      
-      data.forEach((record: TravelRecord) => {
-        const departureDate = new Date(`${record.departure_date} ${record.departure_time}`);
-        const checkin24hTime = new Date(departureDate.getTime() - (24 * 60 * 60 * 1000));
-        const checkin3hTime = new Date(departureDate.getTime() - (3 * 60 * 60 * 1000));
-        
-        scheduleBrowserNotifications(record, checkin24hTime, checkin3hTime);
-      });
-      
-    } catch (error) {
-      console.error('Error saving to Supabase:', error);
-      setError('Failed to save travel record for reminders');
-    } finally {
-      setSaving(false);
+    if (!user) {
+      throw new Error('You must be logged in to save travel records');
     }
-  };
+
+    const travelRecords: Omit<TravelRecord, 'id' | 'created_at'>[] = itinerary.flights.map(flight => {
+      return {
+        passenger_name: itinerary.passengerName || 'Unknown Passenger',
+        pnr: itinerary.pnr || 'UNKNOWN',
+        departure_date: flight.departureDate,
+        departure_time: flight.departureTime,
+        departure_airport: flight.departureAirport,
+        arrival_airport: flight.arrivalAirport,
+        airline_name: flight.airlineName,
+        flight_number: flight.flightNumber,
+        checkin_24h_alert: false,
+        checkin_3h_alert: false,
+        checkin_completed: false,
+        raw_itinerary: itinerary.rawText,
+        contact_info: settings?.contactPerson || reminderSettings.contactPerson || '',
+        user_id: user.id // Use the actual user ID
+      };
+    });
+
+    let successfullySaved: TravelRecord[] = [];
+    let duplicateCount = 0;
+
+    for (const record of travelRecords) {
+      try {
+        const { data, error } = await supabase
+          .from('travel_records')
+          .insert(record)
+          .select()
+          .single();
+
+        if (error) {
+          if (error.code === '23505') { // Unique violation
+            duplicateCount++;
+            continue;
+          }
+          throw error;
+        }
+
+        if (data) {
+          successfullySaved.push(data);
+        }
+      } catch (recordError) {
+        console.error('Error saving individual record:', recordError);
+        if ((recordError as any)?.code === '23505') {
+          duplicateCount++;
+        }
+      }
+    }
+
+    if (successfullySaved.length === 0 && duplicateCount > 0) {
+      setError(`All ${duplicateCount} flight(s) already exist in your travel records`);
+      setShowReminderPopup(false);
+      setSaving(false);
+      return;
+    }
+
+    if (duplicateCount > 0) {
+      setError(`Successfully added ${successfullySaved.length} flight(s). ${duplicateCount} duplicate(s) skipped.`);
+    }
+
+    setSavedRecord(successfullySaved[0]);
+    setShowReminderPopup(false);
+    
+    // Schedule notifications for successfully saved records
+    successfullySaved.forEach((record: TravelRecord) => {
+      const departureDate = new Date(`${record.departure_date} ${record.departure_time}`);
+      const checkin24hTime = new Date(departureDate.getTime() - (24 * 60 * 60 * 1000));
+      const checkin3hTime = new Date(departureDate.getTime() - (3 * 60 * 60 * 1000));
+      
+      scheduleBrowserNotifications(record, checkin24hTime, checkin3hTime);
+    });
+    
+  } catch (error) {
+    console.error('Error saving to Supabase:', error);
+    setError(error instanceof Error ? error.message : 'Failed to save travel records for reminders');
+  } finally {
+    setSaving(false);
+  }
+};
 
   const scheduleBrowserNotifications = (record: TravelRecord, checkin24hTime: Date, checkin3hTime: Date) => {
     if (!('Notification' in window)) {
@@ -404,520 +747,544 @@ Generated by Tuli Travel`;
   };
 
   const generateInvoiceHTML = (itinerary: TravelItinerary) => {
-  const invoiceNumber = `TT-INV-${new Date().getFullYear()}${(new Date().getMonth() + 1).toString().padStart(2, '0')}-${Math.random().toString(36).substring(2, 8).toUpperCase()}`;
-  const issueDate = new Date().toLocaleDateString('en-US', { 
-    year: 'numeric', 
-    month: 'long', 
-    day: 'numeric' 
-  });
+    const invoiceNumber = `TT-INV-${new Date().getFullYear()}${(new Date().getMonth() + 1).toString().padStart(2, '0')}-${Math.random().toString(36).substring(2, 8).toUpperCase()}`;
+    const issueDate = new Date().toLocaleDateString('en-US', { 
+      year: 'numeric', 
+      month: 'long', 
+      day: 'numeric' 
+    });
 
-  return `
-    <!DOCTYPE html>
-    <html>
-    <head>
-      <meta charset="UTF-8">
-      <title>Travel Invoice - ${itinerary.passengerName || 'Travel Booking'}</title>
-      <style>
-        * { 
-          margin: 0; 
-          padding: 0; 
-          box-sizing: border-box; 
-        }
-        @page { 
-          size: A4; 
-          margin: 20mm; 
-        }
-        body { 
-          font-family: 'Helvetica', 'Arial', sans-serif; 
-          background: white; 
-          color: #333;
-          line-height: 1.4;
-        }
-        .invoice-container {
-          max-width: 100%;
-          background: white;
-          border: 1px solid #e0e0e0;
-        }
-        
-        /* Header Styles */
-        .invoice-header {
-          background: #2c3e50;
-          padding: 25px 30px;
-          display: flex;
-          justify-content: space-between;
-          align-items: flex-start;
-          color: white;
-          border-bottom: 4px solid #3498db;
-        }
-        .company-section {
-          display: flex;
-          align-items: center;
-          gap: 20px;
-        }
-        .logo-container {
-          width: 100px;
-          height: 100px;
-          background: white;
-          border-radius: 8px;
-          padding: 8px;
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          border: 2px solid #3498db;
-        }
-        .logo {
-          max-width: 100%;
-          max-height: 100%;
-          object-fit: contain;
-        }
-        .company-info h1 {
-          font-size: 32px;
-          font-weight: 700;
-          margin-bottom: 8px;
-          color: white;
-        }
-        .company-info .tagline {
-          font-size: 16px;
-          opacity: 0.9;
-          font-weight: 300;
-          margin-bottom: 10px;
-        }
-        .company-details {
-          font-size: 13px;
-          opacity: 0.8;
-          line-height: 1.5;
-        }
-        .invoice-meta {
-          text-align: right;
-        }
-        .invoice-title {
-          font-size: 28px;
-          font-weight: 700;
-          margin-bottom: 15px;
-          color: #ecf0f1;
-        }
-        .invoice-number {
-          font-size: 16px;
-          background: rgba(255,255,255,0.1);
-          padding: 10px 20px;
-          border-radius: 6px;
-          display: inline-block;
-          margin-bottom: 10px;
-          font-weight: 600;
-        }
-        .meta-details {
-          font-size: 14px;
-          line-height: 1.6;
-        }
-        
-        /* Billing Section */
-        .billing-section {
-          padding: 30px;
-          display: grid;
-          grid-template-columns: 1fr 1fr;
-          gap: 40px;
-          border-bottom: 2px solid #ecf0f1;
-          background: #f8f9fa;
-        }
-        .bill-to, .trip-summary {
-          padding: 20px;
-          background: white;
-          border-radius: 8px;
-          border: 1px solid #e0e0e0;
-        }
-        .section-title {
-          font-size: 18px;
-          font-weight: 700;
-          color: #2c3e50;
-          margin-bottom: 20px;
-          padding-bottom: 10px;
-          border-bottom: 3px solid #3498db;
-        }
-        .passenger-details {
-          font-size: 15px;
-          line-height: 1.8;
-        }
-        .passenger-name {
-          font-size: 22px;
-          font-weight: 700;
-          color: #2c3e50;
-          margin-bottom: 15px;
-        }
-        .contact-grid {
-          display: grid;
-          grid-template-columns: 1fr 1fr 1fr;
-          gap: 15px;
-          margin-top: 20px;
-        }
-        .contact-item {
-          text-align: center;
-          padding: 12px;
-          background: #f8f9fa;
-          border-radius: 6px;
-          border: 1px solid #e9ecef;
-        }
-        .contact-item strong {
-          display: block;
-          margin-bottom: 5px;
-          color: #2c3e50;
-          font-size: 13px;
-        }
-        .contact-item span {
-          font-size: 13px;
-          color: #6c757d;
-        }
-        
-        /* Flight Table */
-        .flight-section {
-          padding: 0;
-        }
-        .flight-table {
-          width: 100%;
-          border-collapse: collapse;
-          margin: 0;
-          font-size: 13px;
-        }
-        .flight-table th {
-          background: #34495e;
-          color: white;
-          padding: 18px 15px;
-          text-align: left;
-          font-weight: 600;
-          font-size: 13px;
-          text-transform: uppercase;
-          letter-spacing: 0.5px;
-          border: none;
-        }
-        .flight-table td {
-          padding: 18px 15px;
-          border-bottom: 1px solid #dee2e6;
-          vertical-align: top;
-          background: white;
-        }
-        .flight-table tr:nth-child(even) td {
-          background: #f8f9fa;
-        }
-        .flight-table tr:hover td {
-          background: #e8f4fc;
-        }
-        
-        /* Table Cell Styles */
-        .airline-cell {
-          font-weight: 600;
-          color: #2c3e50;
-        }
-        .flight-number {
-          font-size: 12px;
-          color: #6c757d;
-          margin-top: 5px;
-        }
-        .route-cell {
-          font-weight: 600;
-        }
-        .route-details {
-          font-size: 12px;
-          color: #6c757d;
-          margin-top: 5px;
-        }
-        .date-time {
-          font-weight: 600;
-          line-height: 1.5;
-        }
-        .duration {
-          font-size: 12px;
-          color: #6c757d;
-        }
-        
-        /* Status Badges */
-        .status-badge {
-          display: inline-block;
-          padding: 6px 14px;
-          background: #28a745;
-          color: white;
-          border-radius: 15px;
-          font-size: 11px;
-          font-weight: 600;
-          text-transform: uppercase;
-          margin-bottom: 5px;
-        }
-        .cabin-class {
-          background: #007bff;
-        }
-        .overnight-badge {
-          background: #dc3545;
-          font-size: 10px;
-          padding: 4px 10px;
-          margin-top: 5px;
-        }
-        
-        /* Pricing Section */
-        .pricing-section {
-          padding: 30px;
-          background: #f8f9fa;
-          border-top: 3px solid #bdc3c7;
-        }
-        .amount-due {
-          max-width: 400px;
-          margin-left: auto;
-        }
-        .price-row {
-          display: flex;
-          justify-content: space-between;
-          margin-bottom: 12px;
-          padding: 10px 0;
-          font-size: 15px;
-        }
-        .subtotal, .taxes {
-          border-bottom: 1px dashed #adb5bd;
-        }
-        .total {
-          font-size: 20px;
-          font-weight: 700;
-          color: #2c3e50;
-          border-top: 2px solid #3498db;
-          padding-top: 15px;
-          margin-top: 10px;
-        }
-        
-        /* Terms and Footer */
-        .terms-section {
-          padding: 25px 30px;
-          background: #2c3e50;
-          color: white;
-          font-size: 12px;
-          line-height: 1.6;
-        }
-        .payment-terms {
-          margin-bottom: 20px;
-          padding-bottom: 20px;
-          border-bottom: 1px solid rgba(255,255,255,0.3);
-        }
-        .contact-info {
-          display: grid;
-          grid-template-columns: 1fr 1fr 1fr;
-          gap: 20px;
-          margin-top: 20px;
-        }
-        .contact-item {
-          text-align: center;
-        }
-        .contact-item strong {
-          display: block;
-          margin-bottom: 8px;
-          color: #ecf0f1;
-          font-size: 13px;
-        }
-        
-        .footer-section {
-          padding: 25px 30px;
-          background: #ecf0f1;
-          text-align: center;
-          font-size: 12px;
-          color: #6c757d;
-          border-top: 2px solid #bdc3c7;
-        }
-        .footer-section strong {
-          color: #2c3e50;
-          font-size: 13px;
-        }
+    return `
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <meta charset="UTF-8">
+        <title>Travel Invoice - ${itinerary.passengerName || 'Travel Booking'}</title>
+        <style>
+          * { 
+            margin: 0; 
+            padding: 0; 
+            box-sizing: border-box; 
+          }
+          @page { 
+            size: A4; 
+            margin: 20mm; 
+          }
+          body { 
+            font-family: 'Helvetica', 'Arial', sans-serif; 
+            background: white; 
+            color: #333;
+            line-height: 1.4;
+          }
+          .invoice-container {
+            max-width: 100%;
+            background: white;
+            border: 1px solid #e0e0e0;
+          }
+          
+          /* Header Styles */
+          .invoice-header {
+            background: #2c3e50;
+            padding: 25px 30px;
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            color: white;
+            border-bottom: 4px solid #3498db;
+          }
+          .company-section {
+            display: flex;
+            align-items: center;
+            gap: 20px;
+          }
+          .logo-container {
+            width: 100px;
+            height: 100px;
+            background: white;
+            border-radius: 8px;
+            padding: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border: 2px solid #3498db;
+          }
+          .logo {
+            max-width: 100%;
+            max-height: 100%;
+            object-fit: contain;
+          }
+          .company-info h1 {
+            font-size: 32px;
+            font-weight: 700;
+            margin-bottom: 8px;
+            color: white;
+          }
+          .company-info .tagline {
+            font-size: 16px;
+            opacity: 0.9;
+            font-weight: 300;
+            margin-bottom: 10px;
+          }
+          .company-details {
+            font-size: 13px;
+            opacity: 0.8;
+            line-height: 1.5;
+          }
+          .invoice-meta {
+            text-align: right;
+          }
+          .invoice-title {
+            font-size: 28px;
+            font-weight: 700;
+            margin-bottom: 15px;
+            color: #ecf0f1;
+          }
+          .invoice-number {
+            font-size: 16px;
+            background: rgba(255,255,255,0.1);
+            padding: 10px 20px;
+            border-radius: 6px;
+            display: inline-block;
+            margin-bottom: 10px;
+            font-weight: 600;
+          }
+          .meta-details {
+            font-size: 14px;
+            line-height: 1.6;
+          }
+          
+          /* Billing Section */
+          .billing-section {
+            padding: 30px;
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 40px;
+            border-bottom: 2px solid #ecf0f1;
+            background: #f8f9fa;
+          }
+          .bill-to, .trip-summary {
+            padding: 20px;
+            background: white;
+            border-radius: 8px;
+            border: 1px solid #e0e0e0;
+          }
+          .section-title {
+            font-size: 18px;
+            font-weight: 700;
+            color: #2c3e50;
+            margin-bottom: 20px;
+            padding-bottom: 10px;
+            border-bottom: 3px solid #3498db;
+          }
+          .passenger-details {
+            font-size: 15px;
+            line-height: 1.8;
+          }
+          .passenger-name {
+            font-size: 22px;
+            font-weight: 700;
+            color: #2c3e50;
+            margin-bottom: 15px;
+          }
+          .contact-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr 1fr;
+            gap: 15px;
+            margin-top: 20px;
+          }
+          .contact-item {
+            text-align: center;
+            padding: 12px;
+            background: #f8f9fa;
+            border-radius: 6px;
+            border: 1px solid #e9ecef;
+          }
+          .contact-item strong {
+            display: block;
+            margin-bottom: 5px;
+            color: #2c3e50;
+            font-size: 13px;
+          }
+          .contact-item span {
+            font-size: 13px;
+            color: #6c757d;
+          }
+          
+          /* Flight Table */
+          .flight-section {
+            padding: 0;
+          }
+          .flight-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 0;
+            font-size: 13px;
+          }
+          .flight-table th {
+            background: #34495e;
+            color: white;
+            padding: 18px 15px;
+            text-align: left;
+            font-weight: 600;
+            font-size: 13px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            border: none;
+          }
+          .flight-table td {
+            padding: 18px 15px;
+            border-bottom: 1px solid #dee2e6;
+            vertical-align: top;
+            background: white;
+          }
+          .flight-table tr:nth-child(even) td {
+            background: #f8f9fa;
+          }
+          .flight-table tr:hover td {
+            background: #e8f4fc;
+          }
+          
+          /* Table Cell Styles */
+          .airline-cell {
+            font-weight: 600;
+            color: #2c3e50;
+          }
+          .flight-number {
+            font-size: 12px;
+            color: #6c757d;
+            margin-top: 5px;
+          }
+          .route-cell {
+            font-weight: 600;
+          }
+          .route-details {
+            font-size: 12px;
+            color: #6c757d;
+            margin-top: 5px;
+          }
+          .date-time {
+            font-weight: 600;
+            line-height: 1.5;
+          }
+          .duration {
+            font-size: 12px;
+            color: #6c757d;
+          }
+          
+          /* Status Badges */
+          .status-badge {
+            display: inline-block;
+            padding: 6px 14px;
+            background: #28a745;
+            color: white;
+            border-radius: 15px;
+            font-size: 11px;
+            font-weight: 600;
+            text-transform: uppercase;
+            margin-bottom: 5px;
+          }
+          .cabin-class {
+            background: #007bff;
+          }
+          .overnight-badge {
+            background: #dc3545;
+            font-size: 10px;
+            padding: 4px 10px;
+            margin-top: 5px;
+          }
+          
+          /* Pricing Section */
+          .pricing-section {
+            padding: 30px;
+            background: #f8f9fa;
+            border-top: 3px solid #bdc3c7;
+          }
+          .amount-due {
+            max-width: 400px;
+            margin-left: auto;
+          }
+          .price-row {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 12px;
+            padding: 10px 0;
+            font-size: 15px;
+          }
+          .subtotal, .taxes {
+            border-bottom: 1px dashed #adb5bd;
+          }
+          .total {
+            font-size: 20px;
+            font-weight: 700;
+            color: #2c3e50;
+            border-top: 2px solid #3498db;
+            padding-top: 15px;
+            margin-top: 10px;
+          }
+          
+          /* Terms and Footer */
+          .terms-section {
+            padding: 25px 30px;
+            background: #2c3e50;
+            color: white;
+            font-size: 12px;
+            line-height: 1.6;
+          }
+          .payment-terms {
+            margin-bottom: 20px;
+            padding-bottom: 20px;
+            border-bottom: 1px solid rgba(255,255,255,0.3);
+          }
+          .contact-info {
+            display: grid;
+            grid-template-columns: 1fr 1fr 1fr;
+            gap: 20px;
+            margin-top: 20px;
+          }
+          .contact-item {
+            text-align: center;
+          }
+          .contact-item strong {
+            display: block;
+            margin-bottom: 8px;
+            color: #ecf0f1;
+            font-size: 13px;
+          }
+          
+          .footer-section {
+            padding: 25px 30px;
+            background: #ecf0f1;
+            text-align: center;
+            font-size: 12px;
+            color: #6c757d;
+            border-top: 2px solid #bdc3c7;
+          }
+          .footer-section strong {
+            color: #2c3e50;
+            font-size: 13px;
+          }
 
-        /* Logo fallback styling */
-        .logo-fallback {
-          width: 100%;
-          height: 100%;
-          background: linear-gradient(135deg, #3498db, #2c3e50);
-          border-radius: 4px;
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          color: white;
-          font-weight: bold;
-          font-size: 14px;
-          text-align: center;
-        }
-        
-        /* Utility Classes */
-        .text-right { text-align: right; }
-        .text-center { text-align: center; }
-        .mb-3 { margin-bottom: 15px; }
-        .mt-4 { margin-top: 20px; }
-      </style>
-    </head>
-    <body>
-      <div class="invoice-container">
-        <!-- Invoice Header -->
-        <div class="invoice-header">
-          <div class="company-section">
-            <div class="logo-container">
-              <img src="/TULI TRAVEL LOGO.png" alt="Tuli Travel Logo" class="logo" onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';">
-              <div class="logo-fallback" style="display: none;">TULI TRAVEL</div>
-            </div>
-            <div class="company-info">
-              <h1>TULI TRAVEL</h1>
-              <div class="tagline">Executive Adventures and Travel</div>
-              <div class="company-details">
-                
+          /* Logo fallback styling */
+          .logo-fallback {
+            width: 100%;
+            height: 100%;
+            background: linear-gradient(135deg, #3498db, #2c3e50);
+            border-radius: 4px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-weight: bold;
+            font-size: 14px;
+            text-align: center;
+          }
+          
+          /* Utility Classes */
+          .text-right { text-align: right; }
+          .text-center { text-align: center; }
+          .mb-3 { margin-bottom: 15px; }
+          .mt-4 { margin-top: 20px; }
+        </style>
+      </head>
+      <body>
+        <div class="invoice-container">
+          <!-- Invoice Header -->
+          <div class="invoice-header">
+            <div class="company-section">
+              <div class="logo-container">
+                <img src="/TULI TRAVEL LOGO.png" alt="Tuli Travel Logo" class="logo" onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';">
+                <div class="logo-fallback" style="display: none;">TULI TRAVEL</div>
               </div>
-            </div>
-          </div>
-          <div class="invoice-meta">
-            <div class="invoice-title">TRAVEL INVOICE</div>
-            <div class="invoice-number">${invoiceNumber}</div>
-            <div class="meta-details">
-              Issue Date: ${issueDate}<br>
-              PNR: ${itinerary.pnr || 'N/A'}<br>
-              Status: <span class="status-badge">Paid</span>
-            </div>
-          </div>
-        </div>
-        
-        <!-- Billing Information -->
-        <div class="billing-section">
-          <div class="bill-to">
-            <div class="section-title">BILL TO</div>
-            <div class="passenger-details">
-              <div class="passenger-name">${itinerary.passengerName || 'Valued Customer'}</div>
-              <div class="contact-grid">
-                <div class="contact-item">
-                  <strong>Booking Reference</strong>
-                  <span>${itinerary.bookingReference || 'N/A'}</span>
-                </div>
-                <div class="contact-item">
-                  <strong>Invoice Date</strong>
-                  <span>${issueDate}</span>
-                </div>
-                <div class="contact-item">
-                  <strong>Travel Date</strong>
-                  <span>${itinerary.flights[0]?.departureDate || 'N/A'}</span>
+              <div class="company-info">
+                <h1>TULI TRAVEL</h1>
+                <div class="tagline">Executive Adventures and Travel</div>
+                <div class="company-details">
+                  
                 </div>
               </div>
             </div>
-          </div>
-          <div class="trip-summary">
-            <div class="section-title">TRIP SUMMARY</div>
-            <div style="font-size: 15px; line-height: 1.6;">
-              ${itinerary.friendlySummary}<br>
-              <span style="color: #6c757d; font-size: 14px; margin-top: 10px; display: block;">
-                ${itinerary.summary}
-              </span>
+            <div class="invoice-meta">
+              <div class="invoice-title">TRAVEL INVOICE</div>
+              <div class="invoice-number">${invoiceNumber}</div>
+              <div class="meta-details">
+                Issue Date: ${issueDate}<br>
+                PNR: ${itinerary.pnr || 'N/A'}<br>
+                Status: <span class="status-badge">Paid</span>
+              </div>
             </div>
           </div>
-        </div>
-        
-        <!-- Flight Details Table -->
-        <div class="flight-section">
-          <table class="flight-table">
-            <thead>
-              <tr>
-                <th style="width: 20%;">Flight Details</th>
-                <th style="width: 25%;">Route</th>
-                <th style="width: 20%;">Date & Time</th>
-                <th style="width: 15%;">Duration</th>
-                <th style="width: 20%;" class="text-right">Class & Status</th>
-              </tr>
-            </thead>
-            <tbody>
-              ${itinerary.flights.map((flight, index) => `
+          
+          <!-- Billing Information -->
+          <div class="billing-section">
+            <div class="bill-to">
+              <div class="section-title">BILL TO</div>
+              <div class="passenger-details">
+                <div class="passenger-name">${itinerary.passengerName || 'Valued Customer'}</div>
+                <div class="contact-grid">
+                  <div class="contact-item">
+                    <strong>Booking Reference</strong>
+                    <span>${itinerary.bookingReference || 'N/A'}</span>
+                  </div>
+                  <div class="contact-item">
+                    <strong>Invoice Date</strong>
+                    <span>${issueDate}</span>
+                  </div>
+                  <div class="contact-item">
+                    <strong>Travel Date</strong>
+                    <span>${itinerary.flights[0]?.departureDate || 'N/A'}</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div class="trip-summary">
+              <div class="section-title">TRIP SUMMARY</div>
+              <div style="font-size: 15px; line-height: 1.6;">
+                ${itinerary.friendlySummary}<br>
+                <span style="color: #6c757d; font-size: 14px; margin-top: 10px; display: block;">
+                  ${itinerary.summary}
+                </span>
+              </div>
+            </div>
+          </div>
+          
+          <!-- Flight Details Table -->
+          <div class="flight-section">
+            <table class="flight-table">
+              <thead>
                 <tr>
-                  <td class="airline-cell">
-                    ${flight.airlineName}
-                    <div class="flight-number">Flight ${flight.flightNumber}</div>
-                  </td>
-                  <td class="route-cell">
-                    ${flight.departureAirport} → ${flight.arrivalAirport}
-                    <div class="route-details">
-                      ${flight.departureCity} to ${flight.arrivalCity}
-                    </div>
-                  </td>
-                  <td class="date-time">
-                    ${flight.departureDate}<br>
-                    <strong>${flight.departureTime}</strong> - ${flight.arrivalTime}
-                    ${flight.overnight ? '<div class="status-badge overnight-badge">Overnight Flight</div>' : ''}
-                  </td>
-                  <td>
-                    ${flight.duration || 'N/A'}
-                  </td>
-                  <td class="text-right">
-                    <div class="status-badge cabin-class">${flight.cabinClassName}</div>
-                    <div class="status-badge" style="margin-top: 8px;">Confirmed</div>
-                  </td>
+                  <th style="width: 20%;">Flight Details</th>
+                  <th style="width: 25%;">Route</th>
+                  <th style="width: 20%;">Date & Time</th>
+                  <th style="width: 15%;">Duration</th>
+                  <th style="width: 20%;" class="text-right">Class & Status</th>
                 </tr>
-              `).join('')}
-            </tbody>
-          </table>
-        </div>
-        
-        <!-- Pricing Breakdown -->
-        ${itinerary.totalAmount > 0 ? `
-          <div class="pricing-section">
-            <div class="amount-due">
-              <div class="price-row subtotal">
-                <span>Subtotal:</span>
-                <span>${itinerary.currency} ${(itinerary.totalAmount * 0.8).toFixed(2)}</span>
+              </thead>
+              <tbody>
+                ${itinerary.flights.map((flight, index) => `
+                  <tr>
+                    <td class="airline-cell">
+                      ${flight.airlineName}
+                      <div class="flight-number">Flight ${flight.flightNumber}</div>
+                    </td>
+                    <td class="route-cell">
+                      ${flight.departureAirport} → ${flight.arrivalAirport}
+                      <div class="route-details">
+                        ${flight.departureCity} to ${flight.arrivalCity}
+                      </div>
+                    </td>
+                    <td class="date-time">
+                      ${flight.departureDate}<br>
+                      <strong>${flight.departureTime}</strong> - ${flight.arrivalTime}
+                      ${flight.overnight ? '<div class="status-badge overnight-badge">Overnight Flight</div>' : ''}
+                    </td>
+                    <td>
+                      ${flight.duration || 'N/A'}
+                    </td>
+                    <td class="text-right">
+                      <div class="status-badge cabin-class">${flight.cabinClassName}</div>
+                      <div class="status-badge" style="margin-top: 8px;">Confirmed</div>
+                    </td>
+                  </tr>
+                `).join('')}
+              </tbody>
+            </table>
+          </div>
+          
+          <!-- Pricing Breakdown -->
+          ${itinerary.totalAmount > 0 ? `
+            <div class="pricing-section">
+              <div class="amount-due">
+                <div class="price-row subtotal">
+                  <span>Subtotal:</span>
+                  <span>${itinerary.currency} ${(itinerary.totalAmount * 0.8).toFixed(2)}</span>
+                </div>
+                <div class="price-row taxes">
+                  <span>Taxes & Fees:</span>
+                  <span>${itinerary.currency} ${(itinerary.totalAmount * 0.2).toFixed(2)}</span>
+                </div>
+                <div class="price-row total">
+                  <span>TOTAL AMOUNT PAID:</span>
+                  <span>${itinerary.currency} ${itinerary.totalAmount.toFixed(2)}</span>
+                </div>
               </div>
-              <div class="price-row taxes">
-                <span>Taxes & Fees:</span>
-                <span>${itinerary.currency} ${(itinerary.totalAmount * 0.2).toFixed(2)}</span>
+            </div>
+          ` : ''}
+          
+          <!-- Terms and Conditions -->
+          <div class="terms-section">
+            <div class="payment-terms">
+              <strong>PAYMENT TERMS:</strong> This invoice has been paid in full. Amount includes all applicable taxes, fees, and surcharges. Payment received via credit card. For accounting purposes only.
+            </div>
+            <div class="contact-info">
+              <div class="contact-item">
+                <strong>Accounting Department</strong>
+                accounting@tulitravel.com<br>
+                (555) 123-4567 ext. 2
               </div>
-              <div class="price-row total">
-                <span>TOTAL AMOUNT PAID:</span>
-                <span>${itinerary.currency} ${itinerary.totalAmount.toFixed(2)}</span>
+              <div class="contact-item">
+                <strong>Customer Service</strong>
+                support@tulitravel.com<br>
+                (555) 123-4567 ext. 1
+              </div>
+              <div class="contact-item">
+                <strong>Emergency Contact</strong>
+                emergency@tulitravel.com<br>
+                (555) 123-4567 ext. 9
               </div>
             </div>
           </div>
-        ` : ''}
-        
-        <!-- Terms and Conditions -->
-        <div class="terms-section">
-          <div class="payment-terms">
-            <strong>PAYMENT TERMS:</strong> This invoice has been paid in full. Amount includes all applicable taxes, fees, and surcharges. Payment received via credit card. For accounting purposes only.
-          </div>
-          <div class="contact-info">
-            <div class="contact-item">
-              <strong>Accounting Department</strong>
-              accounting@tulitravel.com<br>
-              (555) 123-4567 ext. 2
+          
+          <!-- Footer -->
+          <div class="footer-section">
+            <div style="margin-bottom: 15px;">
+              <strong>TULI TRAVEL - EXECUTIVE ADVENTURES AND TRAVEL</strong><br>
+              Professional & Excellent Customer Experience
             </div>
-            <div class="contact-item">
-              <strong>Customer Service</strong>
-              support@tulitravel.com<br>
-              (555) 123-4567 ext. 1
-            </div>
-            <div class="contact-item">
-              <strong>Emergency Contact</strong>
-              emergency@tulitravel.com<br>
-              (555) 123-4567 ext. 9
+            <div>
+              This document is computer-generated and requires no signature. For accounting and record-keeping purposes only.<br>
+              Invoice generated on ${new Date().toLocaleString()} via Tuli Travel Smart System
             </div>
           </div>
         </div>
-        
-        <!-- Footer -->
-        <div class="footer-section">
-          <div style="margin-bottom: 15px;">
-            <strong>TULI TRAVEL - EXECUTIVE ADVENTURES AND TRAVEL</strong><br>
-            Professional & Excellent Customer Experience
-          </div>
-          <div>
-            This document is computer-generated and requires no signature. For accounting and record-keeping purposes only.<br>
-            Invoice generated on ${new Date().toLocaleString()} via Tuli Travel Smart System
-          </div>
-        </div>
-      </div>
-    </body>
-    </html>
-  `;
-};
+      </body>
+      </html>
+    `;
+  };
 
   const clearAll = () => {
     setInputText('');
     setItinerary(null);
     setError(null);
     setSavedRecord(null);
+    setDuplicateCheck({ isDuplicate: false, existingRecords: [] });
+    setReminderSettings({
+      contactPerson: '',
+      branch: 'Kenya'
+    });
   };
 
   return (
     <div className="space-y-6">
       <ParsingModal />
+      
+      {/* NEW: Separate popup components that don't cause re-renders */}
+      <ReminderPopup
+        isOpen={showReminderPopup}
+        onClose={() => setShowReminderPopup(false)}
+        onSave={handleReminderSave}
+        saving={saving}
+        initialSettings={reminderSettings}
+      />
+      
+      <DuplicateWarningPopup
+        isOpen={duplicateCheck.isDuplicate}
+        onClose={() => setDuplicateCheck({ isDuplicate: false, existingRecords: [] })}
+        onSaveAnyway={() => {
+          setDuplicateCheck({ isDuplicate: false, existingRecords: [] });
+          setShowReminderPopup(true);
+        }}
+        existingRecords={duplicateCheck.existingRecords}
+      />
 
       {/* Header */}
       <div className="flex justify-between items-center">
@@ -1015,7 +1382,7 @@ Generated by Tuli Travel`;
                   </div>
                   
                   <button
-                    onClick={saveToSupabase}
+                    onClick={handleEnableReminders}
                     disabled={saving}
                     className="flex items-center gap-2 bg-amber-500 hover:bg-amber-600 disabled:bg-slate-400 text-white px-6 py-3 rounded-xl font-semibold transition-all text-sm ml-4"
                   >
@@ -1024,7 +1391,7 @@ Generated by Tuli Travel`;
                     ) : (
                       <Bell className="w-4 h-4" />
                     )}
-                    {saving ? 'Saving...' : 'Enable Reminders'}
+                    {saving ? 'Checking...' : 'Enable Reminders'}
                   </button>
                 </div>
               </div>

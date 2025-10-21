@@ -982,17 +982,25 @@ Check-in opens 24 hours before departure. Safe travels! 🛫`;
       <div className="bg-white rounded-2xl p-6 border border-slate-200">
         <div className="flex flex-col md:flex-row gap-4">
           <div className="flex-1">
-            <div className="relative">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
-              <input
-                type="text"
-                placeholder="Search passengers, PNR, or flight number..."
-                value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
-                className="w-full pl-9 pr-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all text-sm"
-              />
-            </div>
-          </div>
+  <div className="relative">
+    <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+    <input
+      type="text"
+      placeholder="Search passengers, PNR, or flight number..."
+      value={searchTerm}
+      onChange={(e) => setSearchTerm(e.target.value)}
+      className="w-full pl-9 pr-9 py-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all text-sm"
+    />
+    {searchTerm && (
+      <button
+        onClick={() => setSearchTerm('')}
+        className="absolute right-3 top-1/2 -translate-y-1/2 p-1 text-slate-400 hover:text-slate-600 hover:bg-slate-200 rounded-full transition-colors"
+      >
+        <X className="w-3 h-3" />
+      </button>
+    )}
+  </div>
+</div>
 
           <div className="flex gap-2">
             {([
@@ -1067,21 +1075,26 @@ Check-in opens 24 hours before departure. Safe travels! 🛫`;
                   
                   return (
                     <tr key={record.id} className="border-b border-slate-100 hover:bg-slate-50 transition-colors">
-                      <td className="p-4">
-                        <div className="flex items-center gap-3">
-                          <div className="w-8 h-8 bg-blue-100 rounded-lg flex items-center justify-center">
-                            <User className="w-4 h-4 text-blue-600" />
-                          </div>
-                          <div>
-                            <div className="text-sm font-semibold text-slate-900">
-                              {record.passenger_name}
-                            </div>
-                            <div className="text-xs text-slate-500">
-                              PNR: {record.pnr}
-                            </div>
-                          </div>
-                        </div>
-                      </td>
+                     <td className="p-4">
+  <div className="flex items-center gap-3">
+    <div className="w-8 h-8 bg-blue-100 rounded-lg flex items-center justify-center">
+      <User className="w-4 h-4 text-blue-600" />
+    </div>
+    <div>
+      <div className="text-sm font-semibold text-slate-900">
+        {record.passenger_name}
+      </div>
+      <div className="text-xs text-slate-500">
+        PNR: {record.pnr}
+      </div>
+      {record.contact_info && (
+        <div className="text-xs text-blue-600 mt-1">
+          {record.contact_info}
+        </div>
+      )}
+    </div>
+  </div>
+</td>
 
                       <td className="p-4">
                         <a 
